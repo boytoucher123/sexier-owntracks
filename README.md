@@ -89,6 +89,25 @@ flutter build apk --release
 flutter build ios --release
 ```
 
+### Releases
+
+Push a tag like `v0.2.0` and GitHub Actions runs the tests, builds the Android
+APK and an unsigned iPhone build, and publishes them as a GitHub release.
+
+To make Android updates install over previous versions, every release must be
+signed with the same key. Create one once:
+
+```bash
+keytool -genkey -v -keystore flock-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias flock
+```
+
+Then add these repository secrets (Settings → Secrets and variables → Actions):
+`ANDROID_KEYSTORE_BASE64` (output of `base64 -w0 flock-release.jks`),
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`flock`) and
+`ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe; losing it means everyone
+has to uninstall and reinstall. Optionally add `MAPS_API_KEY` to enable Google
+Maps in release builds.
+
 ### Turning on Google Maps (optional)
 
 Google Maps only appears in Settings when the build includes an API key.
