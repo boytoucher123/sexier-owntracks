@@ -1,7 +1,8 @@
 name: Release
 
 # Push a tag like v0.1.0 to build the apps and publish a GitHub release.
-# Can also be started by hand from the Actions tab (pick a tag).
+# Or start it by hand from the Actions tab: enter a new tag name and the
+# release (and tag) is created on the commit the workflow ran from.
 on:
   push:
     tags: ["v*"]
@@ -135,4 +136,4 @@ jobs:
             --title "Flock $TAG" \
             --notes-file notes.md \
             --prerelease \
-            --verify-tag
+            --target "$GITHUB_SHA"
