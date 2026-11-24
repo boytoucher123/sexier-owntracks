@@ -55,6 +55,9 @@ OwnTracks app show up in Flock, and Flock users show up in theirs.
 
 ## Server requirements
 
+> This build is set up for one server: its address, port, shared username and
+> private CA certificate are built in. See [docs/SERVER.md](docs/SERVER.md).
+
 - **An MQTT broker** (e.g. Mosquitto) that the phones can reach. TLS on port
   8883 is the default; plain 1883 and WebSockets are under "More options".
   The usual OwnTracks ACL is enough:

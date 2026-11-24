@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
+import '../config/server_config.dart';
 import '../models/settings.dart';
 import 'owntracks_protocol.dart';
 
@@ -374,6 +376,7 @@ class MqttService {
       client.useWebSocket = true;
     } else if (s.useTls) {
       client.secure = true;
+      client.securityContext = serverSecurityContext();
       if (s.allowUntrustedCertificates) {
         // mqtt_client casts this to `bool Function(Object)`, so the parameter
         // must be typed Object or the cast throws a TypeError.
@@ -382,6 +385,13 @@ class MqttService {
     }
     return client;
   }
+
+  /// The phone's normal trusted roots plus our server's private CA, so the
+  /// server's certificate verifies without disabling any checks.
+  @visibleForTesting
+  static SecurityContext serverSecurityContext() =>
+      SecurityContext(withTrustedRoots: true)
+        ..setTrustedCertificatesBytes(utf8.encode(kServerCaPem));
 
   /// Prefer the broker's own refusal reason (e.g. bad password) over the
   /// generic exception mqtt_client throws when a handshake is refused.
@@ -428,6 +438,12 @@ class MqttService {
           m.contains('SELF_SIGNED') ||
           m.contains('UNABLE_TO_GET_ISSUER') ||
           m.contains('CERTIFICATE')) {
+        if ((m.contains('HOSTNAME MISMATCH') ||
+                m.contains('IP ADDRESS MISMATCH')) &&
+            s.host.trim().toLowerCase() != kDefaultHost) {
+          return 'The server\'s security certificate is for a different '
+              'address. Use $kDefaultHost as the server address.';
+        }
         return 'The server\'s security certificate isn\'t trusted by this phone '
             '(it\'s probably self-signed). Turn on "Allow self-signed certificate" '
             'under More options.';

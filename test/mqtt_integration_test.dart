@@ -225,4 +225,53 @@ void main() {
       expect(svc.isConnected, isTrue, reason: svc.lastError.value);
     }, skip: tlsSkip);
   });
+
+  // Against the real server, verifying its certificate with the bundled CA
+  // (no "allow self-signed"). Run on the server itself, where `localhost` is
+  // in the certificate:
+  //   FLOCK_REAL_PASSWORD=... flutter test test/mqtt_integration_test.dart
+  group('real server with bundled CA', () {
+    final pass = Platform.environment['FLOCK_REAL_PASSWORD'];
+    final realSkip = pass == null ? 'set FLOCK_REAL_PASSWORD to run' : null;
+    final host = Platform.environment['FLOCK_REAL_HOST'] ?? 'localhost';
+    AppSettings real() => AppSettings(
+      host: host,
+      password: pass ?? '',
+      deviceName: 'FlockTest',
+      trackerId: 'FT',
+      setupComplete: true,
+    );
+
+    test('test() verifies the certificate and logs in', () async {
+      final r = await MqttService.test(real(), clientId: 'flock-real1');
+      expect(r.success, isTrue, reason: r.message);
+    }, skip: realSkip);
+
+    test('publishes and receives its own message', () async {
+      final svc = MqttService();
+      addTearDown(svc.disconnect);
+      final s = real();
+      final got = Completer<IncomingMessage>();
+      final sub = svc.messages.listen((m) {
+        if (m.topic == s.ownTopic && m.payload.isNotEmpty && !got.isCompleted) {
+          got.complete(m);
+        }
+      });
+      addTearDown(sub.cancel);
+      await svc.connect(s, clientId: 'flock-real2');
+      expect(svc.isConnected, isTrue, reason: svc.lastError.value);
+      svc.publish(s.ownTopic, '{"_type":"test"}', retain: false);
+      final m = await got.future.timeout(const Duration(seconds: 5));
+      expect(m.payload, contains('test'));
+    }, skip: realSkip);
+
+    test('a wrong address gets a clear certificate message', () async {
+      final r = await MqttService.test(
+        real().copyWith(host: '127.0.0.2'),
+        clientId: 'flock-real3',
+      );
+      expect(r.success, isFalse);
+      expect(r.message, contains('different address'));
+    }, skip: realSkip);
+  });
 }
