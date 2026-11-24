@@ -40,11 +40,33 @@ android {
         manifestPlaceholders["mapsApiKey"] = mapsApiKey
     }
 
+    // Release signing. Every update must be signed with the same key or
+    // phones will refuse to install it over the old version. Provide the key
+    // through environment variables (CI) or android/key.properties (local).
+    val keyProps = Properties().apply {
+        val f = rootProject.file("key.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    fun signingValue(name: String): String? =
+        System.getenv(name)?.takeIf { it.isNotBlank() } ?: keyProps.getProperty(name)
+    val keystorePath = signingValue("ANDROID_KEYSTORE_PATH")
+
+    signingConfigs {
+        if (keystorePath != null && file(keystorePath).exists()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = signingValue("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("ANDROID_KEY_ALIAS")
+                keyPassword = signingValue("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Falls back to the debug key so local release builds still work.
+            signingConfig = signingConfigs.findByName("release")
+                ?: signingConfigs.getByName("debug")
         }
     }
 }
