@@ -1,0 +1,98 @@
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/settings.dart';
+
+/// Persists settings. Passwords go to the platform keychain/keystore;
+/// everything else to shared preferences.
+class SettingsStore {
+  SettingsStore({FlutterSecureStorage? secure})
+    : _secure = secure ?? const FlutterSecureStorage();
+
+  final FlutterSecureStorage _secure;
+
+  static const _kSettings = 'settings.v1';
+  static const _kFace = 'face.v1';
+  static const _kClientSuffix = 'clientSuffix.v1';
+  static const _kPassword = 'password';
+  static const _kRecorderPassword = 'recorderPassword';
+
+  Future<AppSettings> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kSettings);
+    final password = await _readSecure(_kPassword);
+    final recorderPassword = await _readSecure(_kRecorderPassword);
+    if (raw == null) return const AppSettings();
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      return AppSettings.fromJson(
+        j,
+        password: password,
+        recorderPassword: recorderPassword,
+      );
+    } on Object {
+      return const AppSettings();
+    }
+  }
+
+  Future<void> save(AppSettings s) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kSettings, s.encode());
+    await _secure.write(key: _kPassword, value: s.password);
+    await _secure.write(key: _kRecorderPassword, value: s.recorderPassword);
+  }
+
+  Future<Uint8List?> loadFace() async {
+    final prefs = await SharedPreferences.getInstance();
+    final b64 = prefs.getString(_kFace);
+    if (b64 == null || b64.isEmpty) return null;
+    try {
+      return base64Decode(b64);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<void> saveFace(Uint8List? bytes) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (bytes == null) {
+      await prefs.remove(_kFace);
+    } else {
+      await prefs.setString(_kFace, base64Encode(bytes));
+    }
+  }
+
+  /// A random suffix generated once per install, so two phones that both
+  /// call themselves "Fred" never kick each other off the broker.
+  Future<String> clientIdSuffix() async {
+    final prefs = await SharedPreferences.getInstance();
+    var s = prefs.getString(_kClientSuffix);
+    if (s == null) {
+      final r = Random.secure();
+      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+      s = List.generate(8, (_) => chars[r.nextInt(chars.length)]).join();
+      await prefs.setString(_kClientSuffix, s);
+    }
+    return s;
+  }
+
+  Future<void> clearAll() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kSettings);
+    await prefs.remove(_kFace);
+    await _secure.delete(key: _kPassword);
+    await _secure.delete(key: _kRecorderPassword);
+  }
+
+  Future<String> _readSecure(String key) async {
+    try {
+      return await _secure.read(key: key) ?? '';
+    } on Object {
+      return '';
+    }
+  }
+}
