@@ -174,6 +174,20 @@ class _ConnectionFormState extends State<ConnectionForm> {
     widget.onTestResult?.call(r);
   }
 
+  /// Fill the form with the alternative that worked, and count it as tested.
+  void _applySuggestion(AppSettings fix) {
+    _host.text = fix.host;
+    _port.text = '${fix.port}';
+    _portTouched = true;
+    _tls = fix.useTls;
+    _ws = fix.useWebSocket;
+    _untrusted = fix.allowUntrustedCertificates;
+    const ok = ConnectionTestResult.ok();
+    setState(() => _result = ok);
+    widget.onChanged(_current());
+    widget.onTestResult?.call(ok);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -201,7 +215,7 @@ class _ConnectionFormState extends State<ConnectionForm> {
           textInputAction: TextInputAction.next,
           decoration: const InputDecoration(
             labelText: 'Username',
-            hintText: 'The shared family login',
+            hintText: 'The login your group shares',
             prefixIcon: Icon(Icons.person_rounded),
           ),
           onChanged: (_) => _changed(),
@@ -311,7 +325,10 @@ class _ConnectionFormState extends State<ConnectionForm> {
               : Padding(
                   key: ValueKey(_result!.message),
                   padding: const EdgeInsets.only(top: 12),
-                  child: _ResultCard(result: _result!),
+                  child: _ResultCard(
+                    result: _result!,
+                    onUseSuggestion: _applySuggestion,
+                  ),
                 ),
         ),
       ],
@@ -320,26 +337,50 @@ class _ConnectionFormState extends State<ConnectionForm> {
 }
 
 class _ResultCard extends StatelessWidget {
-  const _ResultCard({required this.result});
+  const _ResultCard({required this.result, required this.onUseSuggestion});
   final ConnectionTestResult result;
+  final ValueChanged<AppSettings> onUseSuggestion;
 
   @override
   Widget build(BuildContext context) {
-    final color = result.success ? FlockColors.online : FlockColors.danger;
+    final fix = result.suggestion;
+    final color = result.success
+        ? FlockColors.online
+        : fix != null
+        ? FlockColors.warning
+        : FlockColors.danger;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: color.withOpacity(0.12),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(
-            result.success ? Icons.check_circle_rounded : Icons.error_rounded,
-            color: color,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                result.success
+                    ? Icons.check_circle_rounded
+                    : fix != null
+                    ? Icons.lightbulb_rounded
+                    : Icons.error_rounded,
+                color: color,
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(result.message)),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(child: Text(result.message)),
+          if (fix != null) ...[
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () => onUseSuggestion(fix),
+              icon: const Icon(Icons.auto_fix_high_rounded),
+              label: const Text('Use these settings'),
+            ),
+          ],
         ],
       ),
     );

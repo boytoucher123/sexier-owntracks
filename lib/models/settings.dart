@@ -57,7 +57,7 @@ class AppSettings {
   final String password;
 
   // --- Who am I -------------------------------------------------------------
-  /// Topic-safe device segment, e.g. `Fred` in `owntracks/family/Fred`.
+  /// Topic-safe device segment, e.g. `Fred` in `owntracks/crew/Fred`.
   final String deviceName;
 
   /// Two-character tracker ID shown on maps, e.g. `FD`.
@@ -193,7 +193,7 @@ class AppSettings {
 }
 
 /// Turns "Fred Durk" into a topic-safe device name: `Fred`.
-/// Uses the first word so topics read naturally (owntracks/family/Fred).
+/// Uses the first word so topics read naturally (owntracks/crew/Fred).
 String deviceNameFromDisplayName(String displayName) {
   final first = displayName.trim().split(RegExp(r'\s+')).first;
   return sanitizeTopicSegment(first);

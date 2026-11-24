@@ -177,4 +177,52 @@ void main() {
     skip: skip,
     timeout: const Timeout(Duration(seconds: 30)),
   );
+
+  group('self-signed TLS', () {
+    final tlsEnv = Platform.environment['MQTT_TLS_PORT'];
+    final tlsSkip = tlsEnv == null ? 'set MQTT_TLS_PORT to run' : null;
+    final tlsPort = int.tryParse(tlsEnv ?? '') ?? 0;
+    AppSettings tls({bool allow = false}) => settingsFor('Fred').copyWith(
+      host: 'localhost',
+      port: tlsPort,
+      useTls: true,
+      allowUntrustedCertificates: allow,
+    );
+
+    test('explains an untrusted certificate', () async {
+      final r = await MqttService.test(tls(), clientId: 'flock-tls1');
+      expect(r.success, isFalse);
+      expect(r.message, contains('self-signed'));
+    }, skip: tlsSkip);
+
+    test('connects when self-signed is allowed (no TypeError)', () async {
+      final r = await MqttService.test(
+        tls(allow: true),
+        clientId: 'flock-tls2',
+      );
+      expect(r.success, isTrue, reason: r.message);
+    }, skip: tlsSkip);
+
+    test('suggests allowing self-signed automatically', () async {
+      final r = await MqttService.testAndDiagnose(
+        tls(),
+        clientId: 'flock-tls3',
+      );
+      expect(r.success, isFalse);
+      expect(r.suggestion, isNotNull, reason: r.message);
+      expect(r.suggestion!.allowUntrustedCertificates, isTrue);
+      final again = await MqttService.test(
+        r.suggestion!,
+        clientId: 'flock-tls4',
+      );
+      expect(again.success, isTrue, reason: again.message);
+    }, skip: tlsSkip);
+
+    test('the long-lived connection works with self-signed allowed', () async {
+      final svc = MqttService();
+      addTearDown(svc.disconnect);
+      await svc.connect(tls(allow: true), clientId: 'flock-tls5');
+      expect(svc.isConnected, isTrue, reason: svc.lastError.value);
+    }, skip: tlsSkip);
+  });
 }

@@ -13,6 +13,26 @@ import '../theme.dart';
 import '../util/format.dart';
 import 'avatar.dart';
 
+/// CARTO API key, passed at build time with
+/// `--dart-define=CARTO_API_KEY=...` (the release workflow reads it from the
+/// CARTO_API_KEY repository secret). Empty means the free keyless tiles.
+const cartoApiKey = String.fromEnvironment('CARTO_API_KEY');
+
+/// Tile URL for the standard map. The light map uses the keyed CARTO
+/// endpoint when a key is present; dark mode always uses the keyless
+/// dark_all tiles, which is the only keyless path verified so far.
+@visibleForTesting
+String cartoTileUrl({required bool dark, String key = cartoApiKey}) {
+  if (dark) {
+    return 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  }
+  if (key.isNotEmpty) {
+    return 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'
+        '?key=${Uri.encodeQueryComponent(key)}';
+  }
+  return 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+}
+
 /// Lets the home screen move the camera without caring which map is used.
 class FamilyMapController {
   _MapDelegate? _delegate;
@@ -145,7 +165,6 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
   Widget build(BuildContext context) {
     final m = widget.map;
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final style = dark ? 'dark_all' : 'rastertiles/voyager';
     final trailColor = m.trailColor ?? FlockColors.brand;
     return fm.FlutterMap(
       mapController: _mc,
@@ -169,8 +188,7 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
       ),
       children: [
         fm.TileLayer(
-          urlTemplate:
-              'https://{s}.basemaps.cartocdn.com/$style/{z}/{x}/{y}{r}.png',
+          urlTemplate: cartoTileUrl(dark: dark),
           subdomains: const ['a', 'b', 'c', 'd'],
           retinaMode: fm.RetinaMode.isHighDensity(context),
           userAgentPackageName: 'app.flock.flock',

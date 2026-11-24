@@ -551,7 +551,7 @@ class _EmptyPeople extends StatelessWidget {
               const SizedBox(width: 12),
               const Expanded(
                 child: Text(
-                  'Waiting for others. Ask your family to install the app and sign in '
+                  'Waiting for others. Ask your friends to install the app and sign in '
                   'with the same login, using their own name.',
                 ),
               ),

@@ -11,7 +11,7 @@ enum LocationAccess {
   /// We haven't asked yet, or the user dismissed the prompt.
   notAsked,
 
-  /// Only while the app is open. Family won't see updates in the background.
+  /// Only while the app is open. Friends won't see updates in the background.
   whileUsing,
 
   /// All the time. What we want.
@@ -89,7 +89,7 @@ class LocationService {
     _sub = Geolocator.getPositionStream(locationSettings: _settingsFor(mode))
         .listen((pos) => _emit(pos, 'p'), onError: (Object _) {});
 
-    // Even when nobody moves, send a check-in so family can see the phone
+    // Even when nobody moves, send a check-in so friends can see the phone
     // is alive and the battery level stays fresh.
     _heartbeat = Timer.periodic(_heartbeatFor(mode), (_) => reportNow('t'));
 
@@ -174,7 +174,7 @@ class LocationService {
         intervalDuration: interval,
         foregroundNotificationConfig: const ForegroundNotificationConfig(
           notificationTitle: 'Sharing your location',
-          notificationText: 'Your family can see where you are.',
+          notificationText: 'Your friends can see where you are.',
           notificationChannelName: 'Location sharing',
           setOngoing: true,
           enableWakeLock: false,

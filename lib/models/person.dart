@@ -39,7 +39,7 @@ class LocationFix {
 
 /// A person on the map. In this app's model each OwnTracks *device* is a
 /// person: everyone shares one login and puts their own name as the device,
-/// so `owntracks/family/Fred` is Fred.
+/// so `owntracks/crew/Fred` is Fred.
 class Person {
   Person({
     required this.topic,
@@ -51,7 +51,7 @@ class Person {
     this.last,
   });
 
-  /// Base topic, e.g. `owntracks/family/Fred`. Unique key.
+  /// Base topic, e.g. `owntracks/crew/Fred`. Unique key.
   final String topic;
   final String user;
   final String device;
