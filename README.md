@@ -1,6 +1,6 @@
 # Flock
 
-A friendly family-location app for **Android and iOS** that runs on your own
+A friendly location-sharing app for **friend groups**, on **Android and iOS**, that runs on your own
 [OwnTracks](https://owntracks.org) server. It looks and works like Life360,
 and your data stays on your server.
 
@@ -43,17 +43,20 @@ the device part of the topic:
 
 | Person    | Topic                       | Initials |
 |-----------|-----------------------------|----------|
-| Fred Durk | `owntracks/durks/Fred`      | FD       |
-| Mary Durk | `owntracks/durks/Mary`      | MD       |
+| Fred Durk | `owntracks/crew/Fred`       | FD       |
+| Maya Chen | `owntracks/crew/Maya`       | MC       |
 
 The app fills in the device name and initials from the name the person types,
 and both can be edited. It listens to everything under `owntracks/<login>/`,
-so everyone on that login is "family".
+so everyone on that login is in the group.
 
 Flock uses the standard OwnTracks JSON format, so people still on the official
 OwnTracks app show up in Flock, and Flock users show up in theirs.
 
 ## Server requirements
+
+> This build is set up for one server: its address, port, shared username and
+> private CA certificate are built in. See [docs/SERVER.md](docs/SERVER.md).
 
 - **An MQTT broker** (e.g. Mosquitto) that the phones can reach. TLS on port
   8883 is the default; plain 1883 and WebSockets are under "More options".
@@ -106,7 +109,8 @@ Then add these repository secrets (Settings → Secrets and variables → Action
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`flock`) and
 `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe; losing it means everyone
 has to uninstall and reinstall. Optionally add `MAPS_API_KEY` to enable Google
-Maps in release builds.
+Maps in release builds, and `CARTO_API_KEY` to use your own CARTO key for the
+standard map (without it, the free keyless CARTO tiles are used).
 
 ### Turning on Google Maps (optional)
 
@@ -152,7 +156,7 @@ SCREENSHOTS=1 flutter test test/screenshots/screenshots_test.dart
   On iOS it keeps running with "Always" location permission. If someone swipes
   the app away (Android) or force-quits it (iOS), updates stop until they open
   it again.
-- **No place alerts yet** (Life360's "Mary arrived at Home"). OwnTracks
+- **No place alerts yet** (Life360's "Maya arrived at Home"). OwnTracks
   supports this through waypoints, so it's the natural next feature.
 
 ## License

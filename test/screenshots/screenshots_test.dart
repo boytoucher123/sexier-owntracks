@@ -332,37 +332,37 @@ Future<(_State, _Mqtt)> _boot(
   return (state, mqtt);
 }
 
-const _family = AppSettings(
-  host: 'tracking.durk.family',
-  username: 'durks',
+const _crew = AppSettings(
+  host: 'tracking.thecrew.net',
+  username: 'crew',
   password: 'x',
   deviceName: 'Fred',
   displayName: 'Fred Durk',
   trackerId: 'FD',
-  recorderUrl: 'https://tracking.durk.family/owntracks',
+  recorderUrl: 'https://tracking.thecrew.net/owntracks',
   setupComplete: true,
 );
 
 void _populate(_Mqtt m) {
-  const b = 'owntracks/durks';
+  const b = 'owntracks/crew';
   m.inject('$b/Fred', _loc(_fred.$1, _fred.$2, 1, 'FD', batt: 72));
-  m.inject('$b/Mary', _loc(_mary.$1, _mary.$2, 4, 'MD', batt: 54));
+  m.inject('$b/Maya', _loc(_mary.$1, _mary.$2, 4, 'MC', batt: 54));
   m.inject(
-    '$b/Mary/info',
-    OwnTracksProtocol.encodeCard(name: 'Mary Durk', trackerId: 'MD'),
+    '$b/Maya/info',
+    OwnTracksProtocol.encodeCard(name: 'Maya Chen', trackerId: 'MC'),
   );
-  m.inject('$b/Jack', _loc(_jack.$1, _jack.$2, 12, 'JD', batt: 23));
+  m.inject('$b/Jack', _loc(_jack.$1, _jack.$2, 12, 'JL', batt: 23));
   m.inject(
     '$b/Jack/info',
-    OwnTracksProtocol.encodeCard(name: 'Jack Durk', trackerId: 'JD'),
+    OwnTracksProtocol.encodeCard(name: 'Jack Lee', trackerId: 'JL'),
   );
   m.inject(
     '$b/Sophie',
-    _loc(_sophie.$1, _sophie.$2, 2, 'SD', batt: 91, charging: true, speed: 11),
+    _loc(_sophie.$1, _sophie.$2, 2, 'SN', batt: 91, charging: true, speed: 11),
   );
   m.inject(
     '$b/Sophie/info',
-    OwnTracksProtocol.encodeCard(name: 'Sophie Durk', trackerId: 'SD'),
+    OwnTracksProtocol.encodeCard(name: 'Sophie Nguyen', trackerId: 'SN'),
   );
 }
 
@@ -390,9 +390,9 @@ void main() {
     await _settle(t);
     await t.enterText(
       find.widgetWithText(TextField, 'Server address'),
-      'tracking.durk.family',
+      'tracking.thecrew.net',
     );
-    await t.enterText(find.widgetWithText(TextField, 'Username'), 'durks');
+    await t.enterText(find.widgetWithText(TextField, 'Username'), 'crew');
     await t.enterText(
       find.widgetWithText(TextField, 'Password'),
       'hunter2hunter2',
@@ -413,11 +413,11 @@ void main() {
   }, skip: skip != null);
 
   testWidgets('home', (t) async {
-    final (state, mqtt) = await _boot(t, settings: _family);
+    final (state, mqtt) = await _boot(t, settings: _crew);
     _populate(mqtt);
     await _shot(t, '05-home');
 
-    await t.tap(find.text('Mary Durk'));
+    await t.tap(find.text('Maya Chen'));
     await _shot(t, '06-person');
 
     await t.tap(find.text('History'));
@@ -428,13 +428,13 @@ void main() {
   }, skip: skip != null);
 
   testWidgets('home dark', (t) async {
-    final (_, mqtt) = await _boot(t, settings: _family, mode: ThemeMode.dark);
+    final (_, mqtt) = await _boot(t, settings: _crew, mode: ThemeMode.dark);
     _populate(mqtt);
     await _shot(t, '08-home-dark');
   }, skip: skip != null);
 
   testWidgets('settings', (t) async {
-    final (_, mqtt) = await _boot(t, settings: _family);
+    final (_, mqtt) = await _boot(t, settings: _crew);
     _populate(mqtt);
     await _settle(t);
     await t.tap(find.byTooltip('Settings'));

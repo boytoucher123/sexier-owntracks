@@ -10,7 +10,7 @@ import '../models/person.dart';
 class OwnTracksProtocol {
   OwnTracksProtocol._();
 
-  /// Splits `owntracks/family/Fred/info` into its parts. Returns null for
+  /// Splits `owntracks/crew/Fred/info` into its parts. Returns null for
   /// topics that aren't OwnTracks device topics under [baseTopic].
   static TopicParts? parseTopic(
     String topic, {

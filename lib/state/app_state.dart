@@ -108,7 +108,7 @@ class AppState extends ChangeNotifier {
   // ---------------------------------------------------------------- setup ---
 
   Future<ConnectionTestResult> testConnection(AppSettings candidate) {
-    return MqttService.test(candidate, clientId: clientId);
+    return MqttService.testAndDiagnose(candidate, clientId: clientId);
   }
 
   Future<void> updateSettings(

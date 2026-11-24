@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../config/server_config.dart';
+
 /// How hard the phone works to track your position.
 enum TrackingMode {
   /// Few updates, minimal battery. Good for "roughly where are they".
@@ -25,11 +27,11 @@ enum MapProvider {
 /// here; they live in secure storage and are attached at load time.
 class AppSettings {
   const AppSettings({
-    this.host = '',
-    this.port = 8883,
+    this.host = kDefaultHost,
+    this.port = kDefaultPort,
     this.useTls = true,
     this.useWebSocket = false,
-    this.username = '',
+    this.username = kDefaultUsername,
     this.password = '',
     this.deviceName = '',
     this.trackerId = '',
@@ -57,7 +59,7 @@ class AppSettings {
   final String password;
 
   // --- Who am I -------------------------------------------------------------
-  /// Topic-safe device segment, e.g. `Fred` in `owntracks/family/Fred`.
+  /// Topic-safe device segment, e.g. `Fred` in `owntracks/crew/Fred`.
   final String deviceName;
 
   /// Two-character tracker ID shown on maps, e.g. `FD`.
@@ -161,11 +163,11 @@ class AppSettings {
   }) {
     T pick<T>(String k, T fallback) => j[k] is T ? j[k] as T : fallback;
     return AppSettings(
-      host: pick('host', ''),
-      port: pick('port', 8883),
+      host: pick('host', kDefaultHost),
+      port: pick('port', kDefaultPort),
       useTls: pick('useTls', true),
       useWebSocket: pick('useWebSocket', false),
-      username: pick('username', ''),
+      username: pick('username', kDefaultUsername),
       password: password,
       deviceName: pick('deviceName', ''),
       trackerId: pick('trackerId', ''),
@@ -193,7 +195,7 @@ class AppSettings {
 }
 
 /// Turns "Fred Durk" into a topic-safe device name: `Fred`.
-/// Uses the first word so topics read naturally (owntracks/family/Fred).
+/// Uses the first word so topics read naturally (owntracks/crew/Fred).
 String deviceNameFromDisplayName(String displayName) {
   final first = displayName.trim().split(RegExp(r'\s+')).first;
   return sanitizeTopicSegment(first);

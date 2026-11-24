@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 
+import '../config/server_config.dart';
 import '../models/settings.dart';
 import 'owntracks_protocol.dart';
 
@@ -20,11 +22,27 @@ class IncomingMessage {
 class ConnectionTestResult {
   const ConnectionTestResult.ok()
     : success = true,
-      message = 'Connected! Everything looks good.';
-  const ConnectionTestResult.fail(this.message) : success = false;
+      message = 'Connected! Everything looks good.',
+      suggestion = null,
+      suggestionLabel = null;
+  const ConnectionTestResult.fail(this.message)
+    : success = false,
+      suggestion = null,
+      suggestionLabel = null;
+  const ConnectionTestResult.suggest(
+    this.message, {
+    required AppSettings this.suggestion,
+    required String this.suggestionLabel,
+  }) : success = false;
 
   final bool success;
   final String message;
+
+  /// Settings that did work, found by trying common alternatives.
+  final AppSettings? suggestion;
+
+  /// Plain description of what's different, e.g. "port 1883, not secure".
+  final String? suggestionLabel;
 }
 
 /// Thin wrapper around mqtt_client that speaks OwnTracks conventions and
@@ -52,12 +70,109 @@ class MqttService {
 
   bool get isConnected => status.value == ConnectionStatus.connected;
 
+  /// Tests [s]; if it fails for a reason other than the login, quietly tries
+  /// the usual alternatives (self-signed certificate, plain 1883, WebSockets)
+  /// and offers the first one that works.
+  static Future<ConnectionTestResult> testAndDiagnose(
+    AppSettings s, {
+    required String clientId,
+  }) async {
+    final first = await test(s, clientId: clientId);
+    if (first.success || first.message.contains('username or password')) {
+      return first;
+    }
+    for (final (alt, label) in alternativesFor(s)) {
+      final r = await test(alt, clientId: clientId, timeoutMs: 6000);
+      if (r.success) {
+        return ConnectionTestResult.suggest(
+          '${first.message}\n\nBut it does work with $label.',
+          suggestion: alt,
+          suggestionLabel: label,
+        );
+      }
+      if (r.message.contains('username or password')) {
+        // Reached the server this way; the login is what's wrong.
+        return ConnectionTestResult.fail(
+          'Found your server ($label), but it rejected the username or password.',
+        );
+      }
+    }
+    return first;
+  }
+
+  /// Common setups to try when the given one fails.
+  @visibleForTesting
+  static List<(AppSettings, String)> alternativesFor(AppSettings s) {
+    final out = <(AppSettings, String)>[];
+    void add(AppSettings a, String label) {
+      final same =
+          a.port == s.port &&
+          a.useTls == s.useTls &&
+          a.useWebSocket == s.useWebSocket &&
+          a.allowUntrustedCertificates == s.allowUntrustedCertificates;
+      final dup = out.any(
+        (o) =>
+            o.$1.port == a.port &&
+            o.$1.useTls == a.useTls &&
+            o.$1.useWebSocket == a.useWebSocket &&
+            o.$1.allowUntrustedCertificates == a.allowUntrustedCertificates,
+      );
+      if (!same && !dup) out.add((a, label));
+    }
+
+    final host = s.host.contains('://')
+        ? Uri.tryParse(s.host)?.host ?? s.host
+        : s.host;
+    final base = s.copyWith(host: host);
+    if (s.useTls && !s.allowUntrustedCertificates) {
+      add(
+        s.copyWith(allowUntrustedCertificates: true),
+        'a self-signed certificate allowed',
+      );
+    }
+    add(
+      base.copyWith(port: 8883, useTls: true, useWebSocket: false),
+      'secure connection on port 8883',
+    );
+    add(
+      base.copyWith(
+        port: 8883,
+        useTls: true,
+        useWebSocket: false,
+        allowUntrustedCertificates: true,
+      ),
+      'secure connection on port 8883 with a self-signed certificate',
+    );
+    add(
+      base.copyWith(
+        port: 1883,
+        useTls: false,
+        useWebSocket: false,
+        allowUntrustedCertificates: false,
+      ),
+      'port 1883 without a secure connection',
+    );
+    add(
+      base.copyWith(
+        host: 'wss://$host/mqtt',
+        port: 443,
+        useTls: true,
+        useWebSocket: true,
+        allowUntrustedCertificates: false,
+      ),
+      'WebSockets on port 443',
+    );
+    return out;
+  }
+
   /// Connects with a throwaway client to check the details work.
   static Future<ConnectionTestResult> test(
     AppSettings s, {
     required String clientId,
+    int timeoutMs = 10000,
   }) async {
     final client = _buildClient(s, '$clientId-test');
+    client.connectTimeoutPeriod = timeoutMs;
     client.connectionMessage = MqttConnectMessage()
         .withClientIdentifier('$clientId-test')
         .startClean();
@@ -164,7 +279,7 @@ class MqttService {
       }
     });
 
-    // Everyone shares one login, so everything under that login is "family".
+    // Everyone shares one login, so everything under that login is "the group".
     final base = '${s.baseTopic}/${s.username}';
     client.subscribe('$base/+', MqttQos.atLeastOnce);
     client.subscribe('$base/+/info', MqttQos.atLeastOnce);
@@ -261,12 +376,22 @@ class MqttService {
       client.useWebSocket = true;
     } else if (s.useTls) {
       client.secure = true;
+      client.securityContext = serverSecurityContext();
       if (s.allowUntrustedCertificates) {
-        client.onBadCertificate = (_) => true;
+        // mqtt_client casts this to `bool Function(Object)`, so the parameter
+        // must be typed Object or the cast throws a TypeError.
+        client.onBadCertificate = (Object _) => true;
       }
     }
     return client;
   }
+
+  /// The phone's normal trusted roots plus our server's private CA, so the
+  /// server's certificate verifies without disabling any checks.
+  @visibleForTesting
+  static SecurityContext serverSecurityContext() =>
+      SecurityContext(withTrustedRoots: true)
+        ..setTrustedCertificatesBytes(utf8.encode(kServerCaPem));
 
   /// Prefer the broker's own refusal reason (e.g. bad password) over the
   /// generic exception mqtt_client throws when a handshake is refused.
@@ -308,9 +433,23 @@ class MqttService {
       return 'The server at ${s.host}:${s.port} didn\'t answer. Check the address and port.';
     }
     if (e is HandshakeException || e is TlsException) {
+      final m = e.toString().toUpperCase();
+      if (m.contains('CERTIFICATE_VERIFY_FAILED') ||
+          m.contains('SELF_SIGNED') ||
+          m.contains('UNABLE_TO_GET_ISSUER') ||
+          m.contains('CERTIFICATE')) {
+        if ((m.contains('HOSTNAME MISMATCH') ||
+                m.contains('IP ADDRESS MISMATCH')) &&
+            s.host.trim().toLowerCase() != kDefaultHost) {
+          return 'The server\'s security certificate is for a different '
+              'address. Use $kDefaultHost as the server address.';
+        }
+        return 'The server\'s security certificate isn\'t trusted by this phone '
+            '(it\'s probably self-signed). Turn on "Allow self-signed certificate" '
+            'under More options.';
+      }
       return 'A secure connection couldn\'t be set up. If your server doesn\'t use TLS on '
-          'port ${s.port}, turn "Secure connection" off. If it uses a self-signed '
-          'certificate, allow it under Advanced.';
+          'port ${s.port}, turn "Secure connection" off.';
     }
     if (e is SocketException) {
       final m = e.message.toLowerCase();

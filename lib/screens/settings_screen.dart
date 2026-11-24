@@ -83,8 +83,8 @@ class SettingsScreen extends StatelessWidget {
                 title: const Text('Share my location'),
                 subtitle: Text(
                   s.sharingLocation
-                      ? 'Your family can see where you are'
-                      : 'Paused: your family sees your last spot',
+                      ? 'Your friends can see where you are'
+                      : 'Paused: friends see your last spot',
                 ),
                 value: s.sharingLocation,
                 onChanged: (v) =>
@@ -404,7 +404,7 @@ class _MapChoice extends StatelessWidget {
           title: const Text('Use Google Maps?'),
           content: const Text(
             'Google Maps loads map tiles from Google, so Google can see which areas '
-            'you look at. Your family\'s locations still only go to your own server.',
+            'you look at. Everyone\'s locations still only go to your own server.',
           ),
           actions: [
             TextButton(

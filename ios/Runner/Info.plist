@@ -67,15 +67,15 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Your location is shared with your family on your own server so they can see where you are.</string>
+	<string>Your location is shared with your friends on your own server so they can see where you are.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Allow "Always" so your family can still see where you are when the app is closed. Your location only goes to your own server.</string>
+	<string>Allow "Always" so your friends can still see where you are when the app is closed. Your location only goes to your own server.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Allow "Always" so your family can still see where you are when the app is closed.</string>
+	<string>Allow "Always" so your friends can still see where you are when the app is closed.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Take a profile photo so your family can recognise you on the map.</string>
+	<string>Take a profile photo so your friends can recognise you on the map.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Choose a profile photo so your family can recognise you on the map.</string>
+	<string>Choose a profile photo so your friends can recognise you on the map.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

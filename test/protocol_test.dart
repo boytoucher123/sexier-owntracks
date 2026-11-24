@@ -5,6 +5,7 @@ import 'package:flock/models/settings.dart';
 import 'package:flock/services/owntracks_protocol.dart';
 import 'package:flock/services/recorder_service.dart';
 import 'package:flock/widgets/connection_form.dart';
+import 'package:flock/widgets/family_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -252,6 +253,21 @@ void main() {
         ]),
       );
       expect(fixes.length, 1);
+    });
+  });
+
+  group('map tiles', () {
+    test('keyless by default', () {
+      expect(cartoTileUrl(dark: false, key: ''), isNot(contains('key=')));
+    });
+    test('keyed light map uses the CARTO key URL', () {
+      expect(
+        cartoTileUrl(dark: false, key: 'abc_1'),
+        'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=abc_1',
+      );
+    });
+    test('dark map stays on keyless dark tiles', () {
+      expect(cartoTileUrl(dark: true, key: 'abc'), contains('dark_all'));
     });
   });
 }

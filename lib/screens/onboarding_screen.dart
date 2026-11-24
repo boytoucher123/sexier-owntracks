@@ -228,7 +228,7 @@ class _WelcomePage extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            'See where your family is, check they got home safe, and look back '
+            'See where your friends are, check they got home safe, and look back '
             'at their day. On your own server, so it stays private.',
             textAlign: TextAlign.center,
             style: t.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
@@ -318,8 +318,7 @@ class _ServerPage extends StatelessWidget {
     return _PageScaffold(
       icon: Icons.cloud_rounded,
       title: 'Connect to your server',
-      subtitle:
-          'Whoever set up tracking for your family can give you these details.',
+      subtitle: 'Whoever set up the server for your group can give you these details.',
       primary: FilledButton(
         onPressed: ok ? onNext : null,
         child: const Text('Continue'),
@@ -527,7 +526,7 @@ class _YouPageState extends State<_YouPage> {
         Text(
           'Your phone will appear as ${widget.draft.baseTopic}/${widget.draft.username}/'
           '${sanitizeTopicSegment(_device.text).isEmpty ? '…' : sanitizeTopicSegment(_device.text)}. '
-          'Use a different name from everyone else in the family.',
+          'Use a different name from everyone else in the group.',
           style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
         ),
       ],
@@ -753,13 +752,13 @@ class _LocationPageState extends State<_LocationPage>
       null => ('Share your location', '', null, null),
       LocationAccess.notAsked => (
         'Share your location',
-        'Your family sees you on the map only when you allow location access.',
+        'Your friends see you on the map only when you allow location access.',
         'Allow location',
         _request,
       ),
       LocationAccess.whileUsing => (
         'One more thing',
-        'Choose "Allow all the time" so your family can still see you when the '
+        'Choose "Allow all the time" so your friends can still see you when the '
             'app is closed. Without it, your dot only moves while the app is open.',
         'Allow all the time',
         _request,
