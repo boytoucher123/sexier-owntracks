@@ -38,10 +38,21 @@ data in `/var/lib/flock/flock.db` (sqlite).
   without disconnecting anyone. Each user can read and write their own topics,
   read the people they share a group with, and send them a refresh command.
   A leader can also read the card (name and photo) of someone asking to join.
+- **Group settings:** each group has a `config`: either `{"standard": true}`
+  (runs on this server, with each person's own login) or the leader's own
+  server (host, port, TLS, optional CA, shared login, history address, topic
+  prefix). Both carry `tracking_mode`. Only approved members receive it.
+  Groups that existed when this was added were made standard. **New groups
+  start with none and must bring their own server.** Only the owner can put a
+  group on this server: `flock-admin set-standard GROUP_ID`.
+- **Only standard groups use this server.** The ACL gives broker rights only
+  to members of (or people asking to join) a standard group, and the history
+  check works the same way. Accounts in no standard group can sign in but
+  can't publish or read anything here.
 - **History:** Caddy asks flock-server before each Recorder request. Only
   `/api/0/locations` for yourself or someone in your groups is allowed.
 - **Owner commands:** `flock-admin users | groups | add-user NAME |
-  delete-user USER | rewrite-acl`.
+  delete-user USER | set-standard GROUP_ID | rewrite-acl`.
 - **Tests:** `python3 server/test_flock_server.py`.
 
 ## Broker

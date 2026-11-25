@@ -19,13 +19,18 @@ class RecorderException implements Exception {
 /// Fetches location history from the OwnTracks Recorder HTTP API.
 /// https://github.com/owntracks/recorder#http-api
 class RecorderService {
-  RecorderService({http.Client? client}) : _http = client ?? _defaultClient();
+  RecorderService({http.Client? client}) : _injected = client;
 
-  /// Trusts our server's private CA (same as MQTT), with full checks on.
-  static http.Client _defaultClient() =>
-      IOClient(HttpClient(context: serverSecurityContext()));
+  final http.Client? _injected;
+  final Map<String, http.Client> _clients = {};
 
-  final http.Client _http;
+  /// Trusts the server's CA (same as MQTT), with full checks on.
+  http.Client _clientFor(AppSettings s) =>
+      _injected ??
+      _clients.putIfAbsent(
+        s.caPem,
+        () => IOClient(HttpClient(context: serverSecurityContext(s.caPem))),
+      );
 
   Future<List<LocationFix>> history(
     AppSettings s, {
@@ -56,7 +61,7 @@ class RecorderService {
 
     final http.Response res;
     try {
-      res = await _http
+      res = await _clientFor(s)
           .get(uri, headers: headers)
           .timeout(const Duration(seconds: 20));
     } on Object {

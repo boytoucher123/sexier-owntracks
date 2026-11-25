@@ -65,9 +65,11 @@ SUnRavmpkiCWDcGuzQ==
 -----END CERTIFICATE-----
 ''';
 
-/// The phone's normal trusted roots plus our server's private CA, so the
-/// server's certificate verifies without disabling any checks. Used for both
-/// MQTT and the history server.
-SecurityContext serverSecurityContext() =>
-    SecurityContext(withTrustedRoots: true)
-      ..setTrustedCertificatesBytes(utf8.encode(kServerCaPem));
+/// The phone's normal trusted roots plus a server's own CA ([pem], by
+/// default this server's private CA), so its certificate verifies without
+/// disabling any checks. Empty [pem] = the phone's normal roots only.
+SecurityContext serverSecurityContext([String pem = kServerCaPem]) {
+  final c = SecurityContext(withTrustedRoots: true);
+  if (pem.trim().isNotEmpty) c.setTrustedCertificatesBytes(utf8.encode(pem));
+  return c;
+}

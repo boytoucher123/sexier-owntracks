@@ -398,7 +398,7 @@ class MqttService {
       client.useWebSocket = true;
     } else if (s.useTls) {
       client.secure = true;
-      client.securityContext = serverSecurityContext();
+      client.securityContext = serverSecurityContext(s.caPem);
       if (s.allowUntrustedCertificates) {
         // mqtt_client casts this to `bool Function(Object)`, so the parameter
         // must be typed Object or the cast throws a TypeError.

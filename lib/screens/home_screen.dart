@@ -475,6 +475,16 @@ class _PeopleList extends StatelessWidget {
             icon: Icons.location_off_rounded,
             text: 'You\'re not sharing your location. Turn it on in Settings.',
           ),
+        if (app.activeGroup case final g? when g.config == null)
+          _Banner(
+            icon: Icons.dns_rounded,
+            text: g.isLeader
+                ? 'Add a server for ${g.name} so everyone can share their '
+                      'location.'
+                : '${g.name} isn\'t set up yet. ${g.leaderName} needs to add '
+                      'a server.',
+            onTap: () => _openGroups(context),
+          ),
         if (account != null)
           for (final g in account.groups)
             if (g.isLeader && g.requests.isNotEmpty)

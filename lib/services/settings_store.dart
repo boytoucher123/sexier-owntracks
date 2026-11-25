@@ -20,6 +20,7 @@ class SettingsStore {
   static const _kClientSuffix = 'clientSuffix.v1';
   static const _kPassword = 'password';
   static const _kRecorderPassword = 'recorderPassword';
+  static const _kAccount = 'account.v1';
 
   Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -66,6 +67,27 @@ class SettingsStore {
     }
   }
 
+  /// The server's last answer about your groups. Kept in secure storage:
+  /// a group on its own server includes that server's login.
+  Future<Map<String, dynamic>?> loadAccount() async {
+    final raw = await _readSecure(_kAccount);
+    if (raw.isEmpty) return null;
+    try {
+      final j = jsonDecode(raw);
+      return j is Map ? Map<String, dynamic>.from(j) : null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<void> saveAccount(Map<String, dynamic> json) async {
+    try {
+      await _secure.write(key: _kAccount, value: jsonEncode(json));
+    } on Object {
+      // Not fatal: the app just fetches it again next time.
+    }
+  }
+
   /// A random suffix generated once per install, so two phones that both
   /// call themselves "Fred" never kick each other off the broker.
   Future<String> clientIdSuffix() async {
@@ -86,6 +108,7 @@ class SettingsStore {
     await prefs.remove(_kFace);
     await _secure.delete(key: _kPassword);
     await _secure.delete(key: _kRecorderPassword);
+    await _secure.delete(key: _kAccount);
   }
 
   Future<String> _readSecure(String key) async {
