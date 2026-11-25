@@ -6,9 +6,21 @@
 /// certificates can be reissued freely as long as this CA signs them.
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
 const String kDefaultHost = 'owntracks-class-of-2024.duckdns.org';
 const int kDefaultPort = 8883;
 const String kDefaultUsername = 'class_of_2024';
+
+/// Location history (OwnTracks Recorder) behind an HTTPS proxy on the same
+/// server. It accepts the same username and password as MQTT, so nobody has
+/// to enter anything extra. Not secret: it is useless without the login.
+const String kDefaultRecorderUrl =
+    'https://owntracks-class-of-2024.duckdns.org:8443';
+
+/// The server keeps about this many days of history; the app offers this many.
+const int kHistoryDays = 3;
 
 /// CN=OwnTracks MQTT CA, valid until 2036.
 const String kServerCaPem = '''
@@ -43,3 +55,10 @@ UL/RlNkQ8tbTYobrXAJ9j4sJXc2WJZXLPpgglHP6L4KO4Y/IkG6cI4Eod8O+Kf6C
 SUnRavmpkiCWDcGuzQ==
 -----END CERTIFICATE-----
 ''';
+
+/// The phone's normal trusted roots plus our server's private CA, so the
+/// server's certificate verifies without disabling any checks. Used for both
+/// MQTT and the history server.
+SecurityContext serverSecurityContext() =>
+    SecurityContext(withTrustedRoots: true)
+      ..setTrustedCertificatesBytes(utf8.encode(kServerCaPem));

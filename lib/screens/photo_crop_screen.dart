@@ -174,8 +174,15 @@ class _CircleMask extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final r = Offset.zero & size;
     final hole = Path()..addOval(r);
-    final shade = Path.combine(PathOperation.difference, Path()..addRect(r), hole);
-    canvas.drawPath(shade, Paint()..color = Colors.black.withValues(alpha: 0.55));
+    final shade = Path.combine(
+      PathOperation.difference,
+      Path()..addRect(r),
+      hole,
+    );
+    canvas.drawPath(
+      shade,
+      Paint()..color = Colors.black.withValues(alpha: 0.55),
+    );
     canvas.drawOval(
       r.deflate(1),
       Paint()

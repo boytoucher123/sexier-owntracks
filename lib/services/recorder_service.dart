@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
+import '../config/server_config.dart';
 import '../models/person.dart';
 import '../models/settings.dart';
 import 'owntracks_protocol.dart';
@@ -16,7 +19,11 @@ class RecorderException implements Exception {
 /// Fetches location history from the OwnTracks Recorder HTTP API.
 /// https://github.com/owntracks/recorder#http-api
 class RecorderService {
-  RecorderService({http.Client? client}) : _http = client ?? http.Client();
+  RecorderService({http.Client? client}) : _http = client ?? _defaultClient();
+
+  /// Trusts our server's private CA (same as MQTT), with full checks on.
+  static http.Client _defaultClient() =>
+      IOClient(HttpClient(context: serverSecurityContext()));
 
   final http.Client _http;
 

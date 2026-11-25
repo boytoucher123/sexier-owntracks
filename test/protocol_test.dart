@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flock/config/server_config.dart';
 import 'package:flock/models/settings.dart';
 import 'package:flock/services/owntracks_protocol.dart';
 import 'package:flock/services/recorder_service.dart';
@@ -183,6 +184,20 @@ void main() {
       expect(back.trackingMode, TrackingMode.precise);
       expect(back.mapProvider, MapProvider.google);
     });
+
+    test(
+      'history is set up by default, including for older saved settings',
+      () {
+        expect(const AppSettings().recorderUrl, kDefaultRecorderUrl);
+        expect(const AppSettings().hasRecorder, isTrue);
+        final old = AppSettings.fromJson({'host': 'h', 'recorderUrl': ''});
+        expect(old.recorderUrl, kDefaultRecorderUrl);
+        final custom = AppSettings.fromJson({
+          'recorderUrl': 'https://x.example',
+        });
+        expect(custom.recorderUrl, 'https://x.example');
+      },
+    );
   });
 
   group('host input', () {

@@ -630,8 +630,8 @@ class _HistoryPageState extends State<_HistoryPage> {
       icon: Icons.timeline_rounded,
       title: 'See where people have been',
       subtitle:
-          'If your server runs the OwnTracks Recorder, add its web address to '
-          'see each person\'s last few days. You can do this later.',
+          'Your server keeps each person\'s last few days. The address is '
+          'already filled in. Tap Check address to make sure it works.',
       primary: FilledButton(
         onPressed: widget.onNext,
         child: Text(hasUrl ? 'Continue' : 'Skip for now'),
