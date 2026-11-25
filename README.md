@@ -7,7 +7,7 @@ and your data stays on your server.
 <p>
 <img src="docs/screenshots/05-home.png" width="200" alt="Map with everyone and a drag-up list of people">
 <img src="docs/screenshots/07-history.png" width="200" alt="A person's day as a timeline of places and trips">
-<img src="docs/screenshots/02-connect.png" width="200" alt="Connect screen with a Test connection button">
+<img src="docs/screenshots/14-groups.png" width="200" alt="Groups: invite code and a request to join">
 <img src="docs/screenshots/08-home-dark.png" width="200" alt="Dark mode">
 </p>
 
@@ -22,16 +22,20 @@ and your data stays on your server.
   you, and battery level.
 - **Tap a person** to see where they are, ask their phone for a fresh location
   (**Refresh**), open **Directions**, or view their **History**.
-- **History:** pick Today, Yesterday, or any of the last 7 days to see the
-  places they stopped and the trips between them, drawn on the map. History
-  comes from the OwnTracks Recorder.
+- **History:** a Daily History screen for the last 3 days. The day's path is
+  drawn on the map, and a joystick moves through it. Tap any point for its
+  time and address. History comes from the OwnTracks Recorder.
 - **Profile photos:** pick one, move and zoom it in a circle, and tap
   anyone's photo to see it full size. Sent as standard OwnTracks `card` messages, so no server
   changes are needed. They also show up in the official OwnTracks apps and
   the Recorder's web page.
-- **Setup:** enter the server address, username and password, tap **Test
-  connection**, enter your name, and you're done. Error messages are written in
-  plain English ("The server rejected the username or password").
+- **Setup:** enter your name (and a photo), tap **Create my account**, then
+  start a group or enter a code someone sent you. There are no passwords to
+  hand out: the server makes a login for each person.
+- **Groups:** the leader shares a short invite code like `K7Q-2MX`. Anyone with
+  the code can ask to join, and the leader sees their name and photo and taps
+  **Let in**. You only see people you share a group with, and the broker
+  enforces that.
 - **Battery modes:** Saver, Balanced, or Precise.
 - **Maps:** Google Maps by default (when the build has a key), with
   Satellite, Streets, Terrain and Dark styles. Satellite is the default.
@@ -40,35 +44,33 @@ and your data stays on your server.
 
 ## How people are set up
 
-Everyone shares **one login**. Each person picks their own name, which becomes
-the device part of the topic:
+Everyone has **their own account**, made by the server at sign-up. The
+username comes from the person's name, and the device is always `phone`:
 
-| Person    | Topic                       | Initials |
-|-----------|-----------------------------|----------|
-| Fred Durk | `owntracks/crew/Fred`       | FD       |
-| Maya Chen | `owntracks/crew/Maya`       | MC       |
+| Person      | Username      | Topic                          |
+|-------------|---------------|--------------------------------|
+| Fred Durk   | `fred-durk`   | `owntracks/fred-durk/phone`    |
+| Zoë O'Brien | `zoe-obrien`  | `owntracks/zoe-obrien/phone`   |
 
-The app fills in the device name and initials from the name the person types,
-and both can be edited. It listens to everything under `owntracks/<login>/`,
-so everyone on that login is in the group.
+The password is random and stays in the phone's secure storage, so nobody has
+to type or share it. Someone with the same name gets `-2`, `-3` and so on.
+Usernames only show up when the leader is checking a request.
 
-Flock uses the standard OwnTracks JSON format, so people still on the official
-OwnTracks app show up in Flock, and Flock users show up in theirs.
+The app subscribes to `owntracks/+/+`, and the broker's ACL (written by the
+server from the groups) only delivers people you share a group with.
+Messages use the standard OwnTracks JSON format.
 
 ## Server requirements
 
-> This build is set up for one server: its address, port, shared username and
-> private CA certificate are built in. See [docs/SERVER.md](docs/SERVER.md).
+> This build is set up for one server: its address, port and private CA
+> certificate are built in. See [docs/SERVER.md](docs/SERVER.md).
 
-- **An MQTT broker** (e.g. Mosquitto) that the phones can reach. TLS on port
-  8883 is the default; plain 1883 and WebSockets are under "More options".
-  The usual OwnTracks ACL is enough:
-  ```
-  pattern readwrite owntracks/%u/#
-  ```
-- **The OwnTracks Recorder** (optional, needed for History). Enter its web
-  address during setup or later in Settings → Location history. It uses the
-  same username and password unless you set different ones.
+- **Mosquitto** with a password file and an ACL file, both managed by
+  **flock-server** (in [`server/`](server/), Python standard library only). It
+  handles sign-up, groups, invite codes and approvals, and checks history
+  requests.
+- **The OwnTracks Recorder** for History, behind Caddy on port 8443 together
+  with flock-server's API.
 
 ## Building
 

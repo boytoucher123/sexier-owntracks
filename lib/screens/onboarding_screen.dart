@@ -7,14 +7,13 @@ import 'package:provider/provider.dart';
 
 import '../models/settings.dart';
 import '../services/location_service.dart';
-import '../services/mqtt_service.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
-import '../widgets/connection_form.dart';
+import 'groups_screen.dart';
 import 'photo_crop_screen.dart';
 
-/// Welcome → Server → You → History → Location → done.
+/// Welcome → You (makes your account) → Group → Location → done.
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -27,10 +26,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   int _page = 0;
   late AppSettings _draft;
   Uint8List? _photo;
-  bool _connectionOk = false;
   bool _finishing = false;
 
-  static const _count = 5;
+  static const _count = 4;
 
   @override
   void initState() {
@@ -62,6 +60,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       duration: const Duration(milliseconds: 320),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  /// Makes your account the first time; after that just saves name changes.
+  Future<String?> _saveYou() async {
+    final app = context.read<AppState>();
+    if (!app.settings.hasAccount) {
+      final err = await app.createAccount(_draft.displayName);
+      if (err != null) return err;
+    }
+    await app.updateSettings(
+      app.settings.copyWith(
+        displayName: _draft.displayName,
+        trackerId: _draft.trackerId,
+      ),
+    );
+    setState(() => _draft = app.settings);
+    return null;
   }
 
   Future<void> _finish() async {
@@ -107,26 +122,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 onPageChanged: (i) => setState(() => _page = i),
                 children: [
                   _WelcomePage(onNext: _next),
-                  _ServerPage(
-                    draft: _draft,
-                    ok: _connectionOk,
-                    onChanged: (s) => setState(() => _draft = s),
-                    onResult: (r) =>
-                        setState(() => _connectionOk = r?.success ?? false),
-                    onNext: _next,
-                  ),
                   _YouPage(
                     draft: _draft,
                     photo: _photo,
                     onChanged: (s) => setState(() => _draft = s),
                     onPhoto: (b) => setState(() => _photo = b),
+                    onSave: _saveYou,
                     onNext: _next,
                   ),
-                  _HistoryPage(
-                    draft: _draft,
-                    onChanged: (s) => setState(() => _draft = s),
-                    onNext: _next,
-                  ),
+                  _GroupPage(onNext: _next),
                   _LocationPage(onFinish: _finish, finishing: _finishing),
                 ],
               ),
@@ -296,52 +300,6 @@ class _HeroCluster extends StatelessWidget {
   }
 }
 
-// ------------------------------------------------------------------ server --
-
-class _ServerPage extends StatelessWidget {
-  const _ServerPage({
-    required this.draft,
-    required this.ok,
-    required this.onChanged,
-    required this.onResult,
-    required this.onNext,
-  });
-
-  final AppSettings draft;
-  final bool ok;
-  final ValueChanged<AppSettings> onChanged;
-  final ValueChanged<ConnectionTestResult?> onResult;
-  final VoidCallback onNext;
-
-  @override
-  Widget build(BuildContext context) {
-    final app = context.read<AppState>();
-    return _PageScaffold(
-      icon: Icons.cloud_rounded,
-      title: 'Connect to your server',
-      subtitle: 'Whoever set up the server for your group can give you these details.',
-      primary: FilledButton(
-        onPressed: ok ? onNext : null,
-        child: const Text('Continue'),
-      ),
-      secondary: ok || !draft.hasConnectionDetails
-          ? null
-          : TextButton(
-              onPressed: onNext,
-              child: const Text('Skip test and continue'),
-            ),
-      children: [
-        ConnectionForm(
-          initial: draft,
-          onTest: app.testConnection,
-          onChanged: onChanged,
-          onTestResult: onResult,
-        ),
-      ],
-    );
-  }
-}
-
 // --------------------------------------------------------------------- you --
 
 class _YouPage extends StatefulWidget {
@@ -350,6 +308,7 @@ class _YouPage extends StatefulWidget {
     required this.photo,
     required this.onChanged,
     required this.onPhoto,
+    required this.onSave,
     required this.onNext,
   });
 
@@ -357,6 +316,9 @@ class _YouPage extends StatefulWidget {
   final Uint8List? photo;
   final ValueChanged<AppSettings> onChanged;
   final ValueChanged<Uint8List?> onPhoto;
+
+  /// Creates the account (or saves a changed name). Returns an error message.
+  final Future<String?> Function() onSave;
   final VoidCallback onNext;
 
   @override
@@ -366,21 +328,17 @@ class _YouPage extends StatefulWidget {
 class _YouPageState extends State<_YouPage> {
   late final _name = TextEditingController(text: widget.draft.displayName);
   late final _tid = TextEditingController(text: widget.draft.trackerId);
-  late final _device = TextEditingController(text: widget.draft.deviceName);
   late bool _tidTouched =
       widget.draft.trackerId.isNotEmpty &&
       widget.draft.trackerId !=
           trackerIdFromDisplayName(widget.draft.displayName);
-  late bool _deviceTouched =
-      widget.draft.deviceName.isNotEmpty &&
-      widget.draft.deviceName !=
-          deviceNameFromDisplayName(widget.draft.displayName);
+  bool _saving = false;
+  String? _error;
 
   @override
   void dispose() {
     _name.dispose();
     _tid.dispose();
-    _device.dispose();
     super.dispose();
   }
 
@@ -389,16 +347,29 @@ class _YouPageState extends State<_YouPage> {
       widget.draft.copyWith(
         displayName: _name.text.trim(),
         trackerId: _tid.text.trim().toUpperCase(),
-        deviceName: sanitizeTopicSegment(_device.text.trim()),
       ),
     );
   }
 
   void _onName(String v) {
     if (!_tidTouched) _tid.text = trackerIdFromDisplayName(v);
-    if (!_deviceTouched) _device.text = deviceNameFromDisplayName(v);
     _emit();
-    setState(() {});
+    setState(() => _error = null);
+  }
+
+  Future<void> _save() async {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final err = await widget.onSave();
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      _error = err;
+    });
+    if (err == null) widget.onNext();
   }
 
   Future<void> _pick(ImageSource src) async {
@@ -418,11 +389,9 @@ class _YouPageState extends State<_YouPage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
     final ready =
-        _name.text.trim().isNotEmpty &&
-        sanitizeTopicSegment(_device.text).isNotEmpty &&
-        _tid.text.trim().isNotEmpty;
+        _name.text.trim().isNotEmpty && _tid.text.trim().isNotEmpty && !_saving;
+    final hasAccount = context.watch<AppState>().settings.hasAccount;
     final initials = _tid.text.trim().isEmpty
         ? '?'
         : _tid.text.trim().toUpperCase();
@@ -430,10 +399,18 @@ class _YouPageState extends State<_YouPage> {
     return _PageScaffold(
       icon: Icons.face_rounded,
       title: 'Who are you?',
-      subtitle: 'This is how you\'ll appear to everyone else.',
+      subtitle:
+          'This is how you\'ll appear to everyone else. Use your real name '
+          'so your group leader knows it\'s you.',
       primary: FilledButton(
-        onPressed: ready ? widget.onNext : null,
-        child: const Text('Continue'),
+        onPressed: ready ? _save : null,
+        child: _saving
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              )
+            : Text(hasAccount ? 'Continue' : 'Create my account'),
       ),
       children: [
         Center(
@@ -442,8 +419,7 @@ class _YouPageState extends State<_YouPage> {
             child: Stack(
               children: [
                 Avatar(
-                  colorKey:
-                      '${widget.draft.baseTopic}/${widget.draft.username}/${_device.text}',
+                  colorKey: widget.draft.ownTopic,
                   initials: initials,
                   face: widget.photo,
                   size: 112,
@@ -488,51 +464,31 @@ class _YouPageState extends State<_YouPage> {
           onChanged: _onName,
         ),
         const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _tid,
-                maxLength: 2,
-                textCapitalization: TextCapitalization.characters,
-                decoration: const InputDecoration(
-                  labelText: 'Initials',
-                  helperText: 'On the map',
-                  counterText: '',
-                ),
-                onChanged: (_) {
-                  _tidTouched = true;
-                  _emit();
-                  setState(() {});
-                },
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              flex: 2,
-              child: TextField(
-                controller: _device,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Device name',
-                  helperText: 'Letters & numbers only',
-                ),
-                onChanged: (_) {
-                  _deviceTouched = true;
-                  _emit();
-                  setState(() {});
-                },
-              ),
-            ),
-          ],
+        TextField(
+          controller: _tid,
+          maxLength: 2,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
+            labelText: 'Initials',
+            helperText: 'Shown on the map when there\'s no photo',
+            counterText: '',
+          ),
+          onChanged: (_) {
+            _tidTouched = true;
+            _emit();
+            setState(() {});
+          },
         ),
-        const SizedBox(height: 12),
-        Text(
-          'Your phone will appear as ${widget.draft.baseTopic}/${widget.draft.username}/'
-          '${sanitizeTopicSegment(_device.text).isEmpty ? '…' : sanitizeTopicSegment(_device.text)}. '
-          'Use a different name from everyone else in the group.',
-          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-        ),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Icon(Icons.error_rounded, color: FlockColors.danger),
+              const SizedBox(width: 10),
+              Expanded(child: Text(_error!)),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -577,116 +533,49 @@ class _YouPageState extends State<_YouPage> {
   }
 }
 
-// ----------------------------------------------------------------- history --
+// ------------------------------------------------------------------- group --
 
-class _HistoryPage extends StatefulWidget {
-  const _HistoryPage({
-    required this.draft,
-    required this.onChanged,
-    required this.onNext,
-  });
-
-  final AppSettings draft;
-  final ValueChanged<AppSettings> onChanged;
+class _GroupPage extends StatelessWidget {
+  const _GroupPage({required this.onNext});
   final VoidCallback onNext;
 
   @override
-  State<_HistoryPage> createState() => _HistoryPageState();
-}
-
-class _HistoryPageState extends State<_HistoryPage> {
-  late final _url = TextEditingController(text: widget.draft.recorderUrl);
-  bool _testing = false;
-  String? _error;
-  bool _ok = false;
-
-  @override
-  void dispose() {
-    _url.dispose();
-    super.dispose();
-  }
-
-  Future<void> _test() async {
-    setState(() {
-      _testing = true;
-      _error = null;
-      _ok = false;
-    });
-    final err = await context.read<AppState>().testRecorder(
-      widget.draft.copyWith(recorderUrl: _url.text.trim()),
-    );
-    if (!mounted) return;
-    setState(() {
-      _testing = false;
-      _error = err;
-      _ok = err == null;
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final hasUrl = _url.text.trim().isNotEmpty;
+    final a = context.watch<AppState>().account;
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final inSomething =
+        a != null && (a.groups.isNotEmpty || a.pending.isNotEmpty);
     return _PageScaffold(
-      icon: Icons.timeline_rounded,
-      title: 'See where people have been',
+      icon: Icons.groups_rounded,
+      title: 'Your group',
       subtitle:
-          'Your server keeps each person\'s last few days. The address is '
-          'already filled in. Tap Check address to make sure it works.',
+          'You see the people in your groups, and they see you. Nobody else '
+          'can. Start one and share its code, or enter a code someone sent you.',
       primary: FilledButton(
-        onPressed: widget.onNext,
-        child: Text(hasUrl ? 'Continue' : 'Skip for now'),
+        onPressed: onNext,
+        child: Text(inSomething ? 'Continue' : 'Skip for now'),
       ),
       children: [
-        TextField(
-          controller: _url,
-          keyboardType: TextInputType.url,
-          autocorrect: false,
-          decoration: const InputDecoration(
-            labelText: 'Recorder address',
-            hintText: 'e.g. https://tracking.example.com/owntracks',
-            prefixIcon: Icon(Icons.link_rounded),
+        if (a != null) ...[
+          for (final g in a.groups) GroupCard(group: g),
+          for (final p in a.pending) PendingCard(pending: p),
+        ],
+        if (!inSomething) ...[
+          Text('Got a code?', style: t.titleMedium),
+          const SizedBox(height: 8),
+          const JoinGroupForm(),
+          const SizedBox(height: 28),
+          Text('Or start a new group', style: t.titleMedium),
+          const SizedBox(height: 4),
+          Text(
+            'You\'ll be its leader: you get a code to share and decide who '
+            'gets in.',
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
           ),
-          onChanged: (v) {
-            widget.onChanged(widget.draft.copyWith(recorderUrl: v.trim()));
-            setState(() {
-              _ok = false;
-              _error = null;
-            });
-          },
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'Uses the same username and password as your server. You can set a '
-          'separate one in Settings.',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 16),
-        if (hasUrl)
-          OutlinedButton.icon(
-            onPressed: _testing ? null : _test,
-            icon: _testing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2.5),
-                  )
-                : const Icon(Icons.wifi_tethering_rounded),
-            label: Text(_testing ? 'Checking…' : 'Check address'),
-          ),
-        if (_ok || _error != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Row(
-              children: [
-                Icon(
-                  _ok ? Icons.check_circle_rounded : Icons.error_rounded,
-                  color: _ok ? FlockColors.online : FlockColors.danger,
-                ),
-                const SizedBox(width: 10),
-                Expanded(child: Text(_ok ? 'History server found.' : _error!)),
-              ],
-            ),
-          ),
+          const SizedBox(height: 8),
+          const CreateGroupForm(),
+        ],
       ],
     );
   }

@@ -278,14 +278,37 @@ class MqttService {
       }
     });
 
-    // Everyone shares one login, so everything under that login is "the group".
-    final base = '${s.baseTopic}/${s.username}';
-    client.subscribe('$base/+', MqttQos.atLeastOnce);
-    client.subscribe('$base/+/info', MqttQos.atLeastOnce);
+    // The broker only delivers what this login may see (you and the people
+    // in your groups), so listen broadly and let it filter.
+    for (final t in peopleTopics(s)) {
+      client.subscribe(t, MqttQos.atLeastOnce);
+    }
     client.subscribe('${s.ownTopic}/cmd', MqttQos.atLeastOnce);
 
     status.value = ConnectionStatus.connected;
     onConnected?.call();
+  }
+
+  /// Everyone's location and card topics (`owntracks/<user>/<device>`).
+  static List<String> peopleTopics(AppSettings s) => [
+    '${s.baseTopic}/+/+',
+    '${s.baseTopic}/+/+/info',
+  ];
+
+  /// Subscribe again so the broker re-sends everyone's last location, e.g.
+  /// after someone new was let into one of your groups.
+  void refreshPeople() {
+    final c = _client;
+    final s = _wanted;
+    if (c == null ||
+        s == null ||
+        c.connectionStatus?.state != MqttConnectionState.connected) {
+      return;
+    }
+    for (final t in peopleTopics(s)) {
+      c.unsubscribe(t);
+      c.subscribe(t, MqttQos.atLeastOnce);
+    }
   }
 
   void _fail(String message, {required bool retry}) {

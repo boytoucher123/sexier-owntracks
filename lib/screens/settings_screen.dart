@@ -10,6 +10,7 @@ import '../theme.dart';
 import '../widgets/avatar.dart';
 import '../widgets/connection_form.dart';
 import '../widgets/family_map.dart';
+import 'groups_screen.dart';
 import 'photo_crop_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -47,9 +48,7 @@ class SettingsScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            s.displayName.isEmpty
-                                ? s.deviceName
-                                : s.displayName,
+                            s.displayName.isEmpty ? s.username : s.displayName,
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                           Text(
@@ -69,6 +68,26 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 20),
+
+          // ---- Groups
+          _Section(
+            'Groups',
+            children: [
+              ListTile(
+                leading: Badge(
+                  isLabelVisible: (app.account?.waitingRequests ?? 0) > 0,
+                  label: Text('${app.account?.waitingRequests ?? 0}'),
+                  child: const Icon(Icons.groups_rounded),
+                ),
+                title: const Text('Your groups'),
+                subtitle: Text(_groupsSummary(app)),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => Navigator.of(
+                  context,
+                ).push(MaterialPageRoute(builder: (_) => const GroupsScreen())),
+              ),
+            ],
+          ),
 
           // ---- Sharing
           _Section(
@@ -150,29 +169,6 @@ class SettingsScreen extends StatelessWidget {
                   child: const Text('Reconnect'),
                 ),
               ),
-              const Divider(height: 1, indent: 16, endIndent: 16),
-              ListTile(
-                leading: const Icon(Icons.dns_rounded),
-                title: const Text('Server & login'),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const _ServerSettingsPage(),
-                  ),
-                ),
-              ),
-              const Divider(height: 1, indent: 16, endIndent: 16),
-              ListTile(
-                leading: const Icon(Icons.timeline_rounded),
-                title: const Text('Location history'),
-                subtitle: Text(s.hasRecorder ? s.recorderUrl : 'Not set up'),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const _HistorySettingsPage(),
-                  ),
-                ),
-              ),
             ],
           ),
 
@@ -188,8 +184,36 @@ class SettingsScreen extends StatelessWidget {
                   title: const Text('Advanced'),
                   subtitle: const Text('You shouldn\'t need these'),
                   children: [
+                    _InfoRow('Account', '@${s.username}'),
                     _InfoRow('Publishes to', s.ownTopic),
-                    _InfoRow('Listens to', '${s.baseTopic}/${s.username}/+'),
+                    _InfoRow(
+                      'Listens to',
+                      'People in your groups (the server decides)',
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.dns_rounded),
+                      title: const Text('Server & login'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const _ServerSettingsPage(),
+                        ),
+                      ),
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.timeline_rounded),
+                      title: const Text('Location history'),
+                      subtitle: Text(
+                        s.hasRecorder ? s.recorderUrl : 'Not set up',
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const _HistorySettingsPage(),
+                        ),
+                      ),
+                    ),
+
                     _InfoRow('Client ID', app.clientId),
                     ListTile(
                       title: const Text('Keep-alive'),
@@ -235,8 +259,15 @@ class SettingsScreen extends StatelessWidget {
             ),
             onPressed: () => _confirmSignOut(context, app),
             icon: const Icon(Icons.logout_rounded),
-            label: const Text('Sign out and reset'),
+            label: const Text('Sign out of this phone'),
           ),
+          if (s.hasAccount)
+            TextButton.icon(
+              style: TextButton.styleFrom(foregroundColor: FlockColors.danger),
+              onPressed: () => _confirmDelete(context, app),
+              icon: const Icon(Icons.delete_forever_rounded),
+              label: const Text('Delete my account'),
+            ),
           const SizedBox(height: 24),
           Center(
             child: Text(
@@ -266,13 +297,63 @@ class SettingsScreen extends StatelessWidget {
     ConnectionStatus.error => 'Can\'t connect',
   };
 
+  static String _groupsSummary(AppState app) {
+    final a = app.account;
+    if (a == null) return app.accountError ?? 'Loading…';
+    final names = [for (final g in a.groups) g.name];
+    final waiting = a.waitingRequests;
+    final parts = [
+      if (names.isNotEmpty) names.join(', ') else 'Not in a group yet',
+      if (waiting > 0) '$waiting waiting to join',
+      if (a.pending.isNotEmpty) 'waiting on ${a.pending.length} to let you in',
+    ];
+    return parts.join(' · ');
+  }
+
+  Future<void> _confirmDelete(BuildContext context, AppState app) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete your account?'),
+        content: const Text(
+          'You leave all your groups and stop sharing your location. Your '
+          'history is gone within a few days. This can\'t be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: FlockColors.danger,
+              minimumSize: const Size(0, 44),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    final err = await app.deleteAccount();
+    if (!context.mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    } else {
+      Navigator.of(context).popUntil((r) => r.isFirst);
+    }
+  }
+
   Future<void> _confirmSignOut(BuildContext context, AppState app) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Sign out?'),
         content: const Text(
-          'This removes your server details and stops sharing your location from this phone.',
+          'This phone stops sharing your location and forgets your login. '
+          'You can\'t sign back in to the same account, so you\'ll make a new '
+          'one and ask to join your groups again.',
         ),
         actions: [
           TextButton(
@@ -553,13 +634,6 @@ class _ServerSettingsPage extends StatefulWidget {
 class _ServerSettingsPageState extends State<_ServerSettingsPage> {
   late final AppState app = context.read<AppState>();
   late AppSettings _draft = app.settings;
-  late final _device = TextEditingController(text: app.settings.deviceName);
-
-  @override
-  void dispose() {
-    _device.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -568,30 +642,20 @@ class _ServerSettingsPageState extends State<_ServerSettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          Text(
+            'For testing only. Your account was made for you; changing these '
+            'signs this phone in as someone else.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 16),
           ConnectionForm(
             initial: _draft,
             onTest: app.testConnection,
-            onChanged: (s) => setState(
-              () => _draft = s.copyWith(deviceName: _draft.deviceName),
-            ),
-          ),
-          const SizedBox(height: 20),
-          TextField(
-            controller: _device,
-            autocorrect: false,
-            decoration: const InputDecoration(
-              labelText: 'Device name',
-              helperText: 'Changing this makes you appear as a new person',
-            ),
-            onChanged: (v) => setState(
-              () =>
-                  _draft = _draft.copyWith(deviceName: sanitizeTopicSegment(v)),
-            ),
+            onChanged: (s) => setState(() => _draft = s),
           ),
           const SizedBox(height: 24),
           FilledButton(
-            onPressed:
-                _draft.hasConnectionDetails && _draft.deviceName.isNotEmpty
+            onPressed: _draft.hasConnectionDetails
                 ? () async {
                     await app.updateSettings(_draft, reconnect: true);
                     if (context.mounted) Navigator.pop(context);

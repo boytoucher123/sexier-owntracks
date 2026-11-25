@@ -1,0 +1,4 @@
+#!/bin/sh
+# Owner commands for accounts and groups: users, groups, add-user NAME,
+# delete-user USER, rewrite-acl. See flock-server.
+exec /usr/local/bin/flock-server "$@"

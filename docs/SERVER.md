@@ -13,18 +13,43 @@ No passwords are kept in this repo.
 | Secure connection | **On** |
 | Allow self-signed certificate | **Off** (not needed; see below) |
 | WebSockets | Off (the broker has no WebSocket listener) |
-| Username | `class_of_2024` (pre-filled, shared by everyone) |
-| Password | ask the server owner |
-| Recorder URL | `https://owntracks-class-of-2024.duckdns.org:8443` (pre-filled; uses the same login) |
+| Username / password | made by the server at sign-up, never typed |
+| Recorder URL | `https://owntracks-class-of-2024.duckdns.org:8443` (pre-filled; uses the account's login) |
 
-Each person's name becomes the device in `owntracks/class_of_2024/<Name>`.
+Each person is `owntracks/<username>/phone`, with the username made from their
+name (`Fred Durk` becomes `fred-durk`).
+
+## Accounts and groups (flock-server)
+
+`server/flock-server` runs on `127.0.0.1:8091`. Caddy publishes it at
+`https://…:8443/flock/api/`. It is Python standard library only and keeps its
+data in `/var/lib/flock/flock.db` (sqlite).
+
+- **Sign-up:** `POST /flock/api/signup {"name"}` makes the username and a random
+  password, adds them to `/etc/mosquitto/passwd` (mosquitto's own `$7$`
+  format), and returns them once. Limits: 3 per IP per hour, 30 a day.
+- **Groups:** anyone can start one and becomes its leader. Joining is by invite
+  code, and the leader approves each request. A leader can make a new code,
+  rename the group, remove people or hand over leadership. When the leader
+  leaves, the longest-standing member takes over; when the last member leaves,
+  the group is deleted.
+- **Privacy is enforced by mosquitto.** After every change flock-server
+  rewrites `/etc/mosquitto/acl` and sends mosquitto SIGHUP, which reloads it
+  without disconnecting anyone. Each user can read and write their own topics,
+  read the people they share a group with, and send them a refresh command.
+  A leader can also read the card (name and photo) of someone asking to join.
+- **History:** Caddy asks flock-server before each Recorder request. Only
+  `/api/0/locations` for yourself or someone in your groups is allowed.
+- **Owner commands:** `flock-admin users | groups | add-user NAME |
+  delete-user USER | rewrite-acl`.
+- **Tests:** `python3 server/test_flock_server.py`.
 
 ## Broker
 
 - Listeners: `1883` plain (LAN only), `8883` TLS (the router forwards it from the
   internet), `8884` TLS (spare, not forwarded).
-- `allow_anonymous false` with a password file. There is **no ACL file**, so any
-  logged-in user can read and write every topic. That is fine for one shared login.
+- `allow_anonymous false`, with the password file and the ACL file
+  (`acl_file /etc/mosquitto/acl`) both written by flock-server.
 - The public IP is dynamic. DuckDNS keeps the hostname pointed at it.
 
 ## History (Recorder)
@@ -33,12 +58,11 @@ Each person's name becomes the device in `owntracks/class_of_2024/<Name>`.
   `127.0.0.1:8083` only.
 - **Caddy** publishes it on **`8443`** (HTTPS, same certificate as MQTT). The
   router forwards TCP 8443 to the server.
-- **Login is the MQTT login.** Caddy asks a small local checker
-  (`owntracks-authcheck`), which verifies Basic credentials against mosquitto's own
-  password file. There is no second password, and changing an MQTT password
-  changes the history one too. Ten wrong passwords from one IP block it for 15 minutes.
-- **Read-only:** only `GET /api/0/locations`, `/last`, `/list` and `/version`
-  get through. The web UI and everything else return 404.
+- **Login is the account's MQTT login**, checked by flock-server against
+  mosquitto's password file. Ten wrong passwords from one IP block it for 15 minutes.
+- **Read-only, own groups only:** only `GET /api/0/locations` (for you or
+  someone in your groups) and `/version` get through. Everything else returns
+  403 or 404.
 - **Retention:** `owntracks-prune` runs hourly and deletes points older than
   4 days. The app offers today and the two days before.
 
@@ -62,5 +86,8 @@ on, and no one has to install anything.
 On the server, where `localhost` is in the certificate:
 
 ```bash
-FLOCK_REAL_PASSWORD='…' flutter test test/mqtt_integration_test.dart
+flock-admin add-user "Flock Test"        # prints a throwaway login
+FLOCK_REAL_USER=flock-test FLOCK_REAL_PASSWORD='…' \
+  flutter test test/mqtt_integration_test.dart
+flock-admin delete-user flock-test
 ```

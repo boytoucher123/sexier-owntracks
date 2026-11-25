@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
+import '../config/server_config.dart';
 import '../models/person.dart';
 import '../models/settings.dart';
 import '../screens/photo_crop_screen.dart' show kFaceSize;
+import '../services/account_service.dart';
 import '../services/location_service.dart';
 import '../services/mqtt_service.dart';
 import '../services/owntracks_protocol.dart';
@@ -20,15 +22,30 @@ class AppState extends ChangeNotifier {
     MqttService? mqtt,
     LocationService? location,
     RecorderService? recorder,
+    AccountService? accounts,
   }) : _store = store ?? SettingsStore(),
        mqtt = mqtt ?? MqttService(),
        location = location ?? LocationService(),
-       _recorder = recorder ?? RecorderService();
+       _recorder = recorder ?? RecorderService(),
+       accounts = accounts ?? AccountService();
 
   final SettingsStore _store;
   final MqttService mqtt;
   final LocationService location;
   final RecorderService _recorder;
+  final AccountService accounts;
+
+  /// Your groups and who you can see, from the server. Null until loaded.
+  Account? _account;
+  Account? get account => _account;
+  String? _accountError;
+  String? get accountError => _accountError;
+  Timer? _poll;
+
+  /// Cards (name, photo) by username, including people asking to join a
+  /// group you lead, who aren't on the map.
+  final Map<String, CardInfo> _cards = {};
+  CardInfo? cardFor(String username) => _cards[username];
 
   AppSettings _settings = const AppSettings();
   AppSettings get settings => _settings;
@@ -79,6 +96,11 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     _settings = await _store.load();
+    // Set up with the old shared login: go through setup again to make an
+    // account. Name, initials and photo are kept.
+    if (_settings.setupComplete && !_settings.hasAccount) {
+      _settings = _settings.copyWith(setupComplete: false);
+    }
     _myFace = await _store.loadFace();
     _clientSuffix = await _store.clientIdSuffix();
     _googleMaps = await MapAvailability.googleMapsAvailable();
@@ -91,8 +113,9 @@ class AppState extends ChangeNotifier {
     _loaded = true;
     notifyListeners();
 
-    if (_settings.setupComplete) {
+    if (_settings.setupComplete && _settings.hasAccount) {
       unawaited(_goOnline());
+      _startPolling();
     }
   }
 
@@ -105,8 +128,24 @@ class AppState extends ChangeNotifier {
 
   /// Call when the app returns to the foreground.
   void onResume() {
-    if (!_settings.setupComplete) return;
+    if (!_settings.setupComplete || !_settings.hasAccount) return;
     unawaited(mqtt.retryNow());
+    _startPolling();
+  }
+
+  /// Call when the app goes to the background.
+  void onPause() {
+    _poll?.cancel();
+    _poll = null;
+  }
+
+  void _startPolling() {
+    unawaited(refreshAccount());
+    _poll?.cancel();
+    _poll = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => unawaited(refreshAccount()),
+    );
   }
 
   void _onConnected() {
@@ -130,6 +169,14 @@ class AppState extends ChangeNotifier {
     _settings = next;
     await _store.save(next);
     notifyListeners();
+
+    // Renamed yourself: tell the server too (your username stays the same).
+    if (prev.displayName != next.displayName &&
+        prev.username == next.username &&
+        next.hasAccount &&
+        next.displayName.trim().isNotEmpty) {
+      unawaited(_act(() => accounts.rename(next, next.displayName.trim())));
+    }
 
     if (!next.setupComplete) return;
 
@@ -174,17 +221,117 @@ class AppState extends ChangeNotifier {
       _settings.copyWith(setupComplete: true),
       reconnect: true,
     );
+    _startPolling();
   }
 
   /// Forget everything and go back to the welcome screen.
   Future<void> signOut() async {
+    onPause();
     await location.stop();
     await mqtt.disconnect();
     await _store.clearAll();
     _people.clear();
+    _cards.clear();
+    _account = null;
+    _accountError = null;
     _myFace = null;
     _settings = const AppSettings();
     notifyListeners();
+  }
+
+  // -------------------------------------------------------------- account ---
+
+  /// Makes your own login on the server from your name. Returns an error
+  /// message, or null when it worked.
+  Future<String?> createAccount(String name) async {
+    try {
+      final a = await accounts.signUp(name.trim());
+      _people.clear();
+      _cards.clear();
+      await updateSettings(
+        _settings.copyWith(
+          username: a.username,
+          password: a.password,
+          deviceName: kDeviceName,
+          displayName: a.name,
+          trackerId: _settings.trackerId.isEmpty
+              ? trackerIdFromDisplayName(a.name)
+              : null,
+        ),
+        reconnect: true,
+      );
+      if (_settings.setupComplete) _startPolling();
+      await refreshAccount();
+      return null;
+    } on AccountException catch (e) {
+      return e.message;
+    }
+  }
+
+  Future<void> refreshAccount() async {
+    if (!_settings.hasAccount) return;
+    try {
+      _setAccount(await accounts.me(_settings));
+      _accountError = null;
+    } on AccountException catch (e) {
+      _accountError = e.message;
+      notifyListeners();
+    }
+  }
+
+  void _setAccount(Account a) {
+    final before = {...?_account?.visible.keys, ...?_account?.requesters};
+    _account = a;
+    // Drop anyone you no longer share a group with.
+    _people.removeWhere((_, p) => !isMe(p) && !a.visible.containsKey(p.user));
+    for (final p in _people.values) {
+      p.accountName = isMe(p) ? a.name : a.visible[p.user];
+    }
+    // Someone new: subscribe again so the broker sends their last position.
+    final now = {...a.visible.keys, ...a.requesters};
+    if (now.any((u) => !before.contains(u))) mqtt.refreshPeople();
+    notifyListeners();
+  }
+
+  /// Runs a group action and applies the server's answer. Returns an error
+  /// message, or null when it worked.
+  Future<String?> _act(Future<Account> Function() call) async {
+    try {
+      _setAccount(await call());
+      return null;
+    } on AccountException catch (e) {
+      return e.message;
+    }
+  }
+
+  Future<String?> createGroup(String name) =>
+      _act(() => accounts.createGroup(_settings, name.trim()));
+  Future<String?> joinGroup(String code) =>
+      _act(() => accounts.join(_settings, code.trim()));
+  Future<String?> approve(Group g, JoinRequest r) =>
+      _act(() => accounts.approve(_settings, g.id, r.username));
+  Future<String?> deny(Group g, JoinRequest r) =>
+      _act(() => accounts.deny(_settings, g.id, r.username));
+  Future<String?> removeMember(Group g, String username) =>
+      _act(() => accounts.remove(_settings, g.id, username));
+  Future<String?> leaveGroup(Group g) =>
+      _act(() => accounts.remove(_settings, g.id, _settings.username));
+  Future<String?> newInviteCode(Group g) =>
+      _act(() => accounts.newCode(_settings, g.id));
+  Future<String?> renameGroup(Group g, String name) =>
+      _act(() => accounts.renameGroup(_settings, g.id, name.trim()));
+  Future<String?> makeLeader(Group g, String username) =>
+      _act(() => accounts.makeLeader(_settings, g.id, username));
+
+  /// Deletes your account on the server, then signs out.
+  Future<String?> deleteAccount() async {
+    try {
+      await accounts.deleteAccount(_settings);
+    } on AccountException catch (e) {
+      if (!e.unauthorized) return e.message;
+    }
+    await signOut();
+    return null;
   }
 
   // -------------------------------------------------------------- profile ---
@@ -338,6 +485,14 @@ class AppState extends ChangeNotifier {
     } else if (parts.subtopic == 'info') {
       final card = OwnTracksProtocol.parseCard(json);
       if (card == null) return;
+      _cards[parts.user] = card;
+      final a = _account;
+      if (a != null &&
+          parts.deviceTopic != _settings.ownTopic &&
+          !a.visible.containsKey(parts.user)) {
+        notifyListeners(); // someone asking to join: card only, not on the map
+        return;
+      }
       final p = _ensurePerson(parts.deviceTopic, parts: parts)!;
       if (isMe(p)) return; // we already know who we are
       p.cardName = card.name;
@@ -359,7 +514,7 @@ class AppState extends ChangeNotifier {
       topic: topic,
       user: parts.user,
       device: parts.device,
-    );
+    )..accountName = _account?.visible[parts.user];
   }
 
   @override
