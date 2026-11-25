@@ -260,14 +260,17 @@ void main() {
     test('keyless by default', () {
       expect(cartoTileUrl(dark: false, key: ''), isNot(contains('key=')));
     });
-    test('keyed light map uses the CARTO key URL', () {
+    test('light map carries the CARTO key', () {
       expect(
         cartoTileUrl(dark: false, key: 'abc_1'),
-        'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=abc_1',
+        'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=abc_1',
       );
     });
-    test('dark map stays on keyless dark tiles', () {
-      expect(cartoTileUrl(dark: true, key: 'abc'), contains('dark_all'));
+    test('dark map carries the CARTO key too', () {
+      expect(
+        cartoTileUrl(dark: true, key: 'abc_1'),
+        'https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png?key=abc_1',
+      );
     });
   });
 }

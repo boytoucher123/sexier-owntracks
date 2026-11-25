@@ -15,22 +15,18 @@ import 'avatar.dart';
 
 /// CARTO API key, passed at build time with
 /// `--dart-define=CARTO_API_KEY=...` (the release workflow reads it from the
-/// CARTO_API_KEY repository secret). Empty means the free keyless tiles.
+/// CARTO_API_KEY repository secret). Without it tiles show CARTO's watermark.
 const cartoApiKey = String.fromEnvironment('CARTO_API_KEY');
 
-/// Tile URL for the standard map. The light map uses the keyed CARTO
-/// endpoint when a key is present; dark mode always uses the keyless
-/// dark_all tiles, which is the only keyless path verified so far.
+/// Tile URL for the standard map: CARTO Voyager (light) or Dark Matter
+/// (dark). Since September 2026 CARTO watermarks every tile requested
+/// without a key with "API KEY REQUIRED", so both styles carry the key.
 @visibleForTesting
 String cartoTileUrl({required bool dark, String key = cartoApiKey}) {
-  if (dark) {
-    return 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-  }
-  if (key.isNotEmpty) {
-    return 'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'
-        '?key=${Uri.encodeQueryComponent(key)}';
-  }
-  return 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+  final style = dark ? 'dark_all' : 'voyager';
+  final url = 'https://basemaps.cartocdn.com/rastertiles/$style/{z}/{x}/{y}{r}.png';
+  if (key.isEmpty) return url;
+  return '$url?key=${Uri.encodeQueryComponent(key)}';
 }
 
 /// Lets the home screen move the camera without caring which map is used.
@@ -189,7 +185,6 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
       children: [
         fm.TileLayer(
           urlTemplate: cartoTileUrl(dark: dark),
-          subdomains: const ['a', 'b', 'c', 'd'],
           retinaMode: fm.RetinaMode.isHighDensity(context),
           userAgentPackageName: 'app.flock.flock',
           maxNativeZoom: 20,
