@@ -25,15 +25,17 @@ and your data stays on your server.
 - **History:** pick Today, Yesterday, or any of the last 7 days to see the
   places they stopped and the trips between them, drawn on the map. History
   comes from the OwnTracks Recorder.
-- **Profile photos:** sent as standard OwnTracks `card` messages, so no server
+- **Profile photos:** pick one, move and zoom it in a circle, and tap
+  anyone's photo to see it full size. Sent as standard OwnTracks `card` messages, so no server
   changes are needed. They also show up in the official OwnTracks apps and
   the Recorder's web page.
 - **Setup:** enter the server address, username and password, tap **Test
   connection**, enter your name, and you're done. Error messages are written in
   plain English ("The server rejected the username or password").
 - **Battery modes:** Saver, Balanced, or Precise.
-- **Maps:** standard OpenStreetMap-based maps by default. Google Maps is an
-  opt-in choice in Settings (see below).
+- **Maps:** Google Maps by default (when the build has a key), with
+  Satellite, Streets, Terrain and Dark styles. Satellite is the default.
+  OpenStreetMap is the alternative in Settings, with Esri satellite photos.
 - **Dark mode**, and an **Advanced** section in Settings that stays tucked away.
 
 ## How people are set up
@@ -104,17 +106,18 @@ signed with the same key. Create one once:
 keytool -genkey -v -keystore flock-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias flock
 ```
 
-Then add these repository secrets (Settings → Secrets and variables → Actions):
-`ANDROID_KEYSTORE_BASE64` (output of `base64 -w0 flock-release.jks`),
-`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`flock`) and
-`ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe; losing it means everyone
+Then add two repository secrets (Settings → Secrets and variables → Actions):
+`ANDROID_KEYSTORE_BASE64` (output of `base64 -w0 flock-release.jks`) and
+`ANDROID_KEYSTORE_PASSWORD`. If your alias isn't `flock`, or the key has its
+own password, also add `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe; losing it means everyone
 has to uninstall and reinstall. Optionally add `GOOGLE_API_KEY` to enable Google
 Maps in release builds, and `CARTO_API_KEY` for the standard map. CARTO's free key
 (carto.com/basemaps/apikey) is required: without it every tile says "API KEY REQUIRED".
 
 ### Turning on Google Maps (optional)
 
-Google Maps only appears in Settings when the build includes an API key.
+Google Maps is used by default when the build includes an API key;
+without one the app uses OpenStreetMap.
 Google's Maps SDKs for Android and iOS currently cost nothing to use, but
 Google still requires a Cloud project with billing turned on. Create a key in
 Google Cloud Console, enable *Maps SDK for Android* and *Maps SDK for iOS*,
@@ -124,9 +127,8 @@ then:
 - **iOS:** create `ios/Flutter/Secrets.xcconfig` containing
   `GOOGLE_MAPS_API_KEY=your-key`
 
-Both files are git-ignored. People still have to choose Google Maps in
-Settings; the app asks them to confirm first, because map views then go
-through Google.
+Both files are git-ignored. Release builds take the key from the
+`GOOGLE_API_KEY` repository secret.
 
 ## Tests
 

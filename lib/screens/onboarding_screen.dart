@@ -12,6 +12,7 @@ import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
 import '../widgets/connection_form.dart';
+import 'photo_crop_screen.dart';
 
 /// Welcome → Server → You → History → Location → done.
 class OnboardingScreen extends StatefulWidget {
@@ -403,12 +404,15 @@ class _YouPageState extends State<_YouPage> {
   Future<void> _pick(ImageSource src) async {
     final x = await ImagePicker().pickImage(
       source: src,
-      maxWidth: 1024,
-      maxHeight: 1024,
+      maxWidth: 2048,
+      maxHeight: 2048,
       preferredCameraDevice: CameraDevice.front,
     );
     if (x == null) return;
-    widget.onPhoto(await x.readAsBytes());
+    final bytes = await x.readAsBytes();
+    if (!mounted) return;
+    final cropped = await PhotoCropScreen.open(context, bytes);
+    if (cropped != null) widget.onPhoto(cropped);
   }
 
   @override

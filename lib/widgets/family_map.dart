@@ -29,6 +29,22 @@ String cartoTileUrl({required bool dark, String key = cartoApiKey}) {
   return '$url?key=${Uri.encodeQueryComponent(key)}';
 }
 
+/// Esri World Imagery: free satellite photos for the standard map, with
+/// Esri's place-name layer drawn on top.
+const esriImageryUrl =
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const esriLabelsUrl =
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
+
+/// Styles each map can draw. Terrain is Google-only; the standard map
+/// shows streets instead.
+List<MapStyle> mapStylesFor(MapProvider provider) => provider == MapProvider.google
+    ? MapStyle.values
+    : const [MapStyle.satellite, MapStyle.streets, MapStyle.dark];
+
+MapStyle effectiveMapStyle(MapProvider provider, MapStyle style) =>
+    mapStylesFor(provider).contains(style) ? style : MapStyle.streets;
+
 /// Lets the home screen move the camera without caring which map is used.
 class FamilyMapController {
   _MapDelegate? _delegate;
@@ -53,6 +69,7 @@ class FamilyMap extends StatelessWidget {
   const FamilyMap({
     super.key,
     required this.provider,
+    this.style = MapStyle.satellite,
     required this.controller,
     required this.people,
     required this.onPersonTap,
@@ -70,6 +87,7 @@ class FamilyMap extends StatelessWidget {
   static fm.TileProvider? debugTileProvider;
 
   final MapProvider provider;
+  final MapStyle style;
   final FamilyMapController controller;
   final List<Person> people;
   final String? selectedTopic;
@@ -160,7 +178,7 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
   @override
   Widget build(BuildContext context) {
     final m = widget.map;
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final style = effectiveMapStyle(MapProvider.standard, m.style);
     final trailColor = m.trailColor ?? FlockColors.brand;
     return fm.FlutterMap(
       mapController: _mc,
@@ -183,13 +201,27 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
         },
       ),
       children: [
-        fm.TileLayer(
-          urlTemplate: cartoTileUrl(dark: dark),
-          retinaMode: fm.RetinaMode.isHighDensity(context),
-          userAgentPackageName: 'app.flock.flock',
-          maxNativeZoom: 20,
-          tileProvider: FamilyMap.debugTileProvider,
-        ),
+        if (style == MapStyle.satellite) ...[
+          fm.TileLayer(
+            urlTemplate: esriImageryUrl,
+            userAgentPackageName: 'app.flock.flock',
+            maxNativeZoom: 18,
+            tileProvider: FamilyMap.debugTileProvider,
+          ),
+          fm.TileLayer(
+            urlTemplate: esriLabelsUrl,
+            userAgentPackageName: 'app.flock.flock',
+            maxNativeZoom: 18,
+            tileProvider: FamilyMap.debugTileProvider,
+          ),
+        ] else
+          fm.TileLayer(
+            urlTemplate: cartoTileUrl(dark: style == MapStyle.dark),
+            retinaMode: fm.RetinaMode.isHighDensity(context),
+            userAgentPackageName: 'app.flock.flock',
+            maxNativeZoom: 20,
+            tileProvider: FamilyMap.debugTileProvider,
+          ),
         if (m.trail.length > 1)
           fm.PolylineLayer(
             polylines: [
@@ -238,10 +270,16 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
         fm.RichAttributionWidget(
           alignment: fm.AttributionAlignment.bottomLeft,
           showFlutterMapAttribution: false,
-          attributions: [
-            fm.TextSourceAttribution('OpenStreetMap contributors'),
-            fm.TextSourceAttribution('CARTO'),
-          ],
+          attributions: style == MapStyle.satellite
+              ? [
+                  fm.TextSourceAttribution(
+                    'Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+                  ),
+                ]
+              : [
+                  fm.TextSourceAttribution('OpenStreetMap contributors'),
+                  fm.TextSourceAttribution('CARTO'),
+                ],
         ),
       ],
     );
@@ -334,7 +372,6 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
   Widget build(BuildContext context) {
     _refreshIcons();
     final m = widget.map;
-    final dark = Theme.of(context).brightness == Brightness.dark;
     final trailColor = m.trailColor ?? FlockColors.brand;
     final first = widget.visible.isNotEmpty
         ? widget.visible.first.last!.latLng
@@ -347,7 +384,12 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
       onMapCreated: (c) {
         if (!_controller.isCompleted) _controller.complete(c);
       },
-      style: dark ? _darkStyle : null,
+      mapType: switch (m.style) {
+        MapStyle.satellite => gm.MapType.hybrid,
+        MapStyle.terrain => gm.MapType.terrain,
+        MapStyle.streets || MapStyle.dark => gm.MapType.normal,
+      },
+      style: m.style == MapStyle.dark ? _darkStyle : null,
       padding: EdgeInsets.only(top: m.topInset, bottom: m.bottomInset),
       myLocationButtonEnabled: false,
       zoomControlsEnabled: false,

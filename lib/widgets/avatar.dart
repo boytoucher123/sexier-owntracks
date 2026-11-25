@@ -17,6 +17,8 @@ class Avatar extends StatelessWidget {
     this.size = 48,
     this.ring = true,
     this.dimmed = false,
+    this.enlargeable = false,
+    this.label,
   });
 
   factory Avatar.person(
@@ -24,6 +26,7 @@ class Avatar extends StatelessWidget {
     Key? key,
     double size = 48,
     bool dimmed = false,
+    bool enlargeable = false,
   }) => Avatar(
     key: key,
     colorKey: p.topic,
@@ -31,6 +34,8 @@ class Avatar extends StatelessWidget {
     face: p.face,
     size: size,
     dimmed: dimmed,
+    enlargeable: enlargeable,
+    label: p.name,
   );
 
   final String colorKey;
@@ -40,8 +45,27 @@ class Avatar extends StatelessWidget {
   final bool ring;
   final bool dimmed;
 
+  /// Tapping the photo opens it full screen. Has no effect without a photo.
+  final bool enlargeable;
+
+  /// Title shown above the enlarged photo.
+  final String? label;
+
   @override
   Widget build(BuildContext context) {
+    final a = _build(context);
+    if (!enlargeable || face == null) return a;
+    return Semantics(
+      button: true,
+      label: 'Show photo',
+      child: GestureDetector(
+        onTap: () => showPhotoViewer(context, face!, title: label),
+        child: Hero(tag: face!, child: a),
+      ),
+    );
+  }
+
+  Widget _build(BuildContext context) {
     final color = FlockColors.forKey(colorKey);
     final ringWidth = ring ? (size * 0.06).clamp(2.0, 4.0) : 0.0;
     Widget inner;
@@ -239,4 +263,54 @@ Future<Uint8List> renderPinBitmap(
   final image = await picture.toImage(w.ceil(), h.ceil());
   final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
   return bytes!.buffer.asUint8List();
+}
+
+/// Shows a profile photo as big as the screen allows. Tap anywhere or swipe
+/// back to close; pinch to zoom.
+Future<void> showPhotoViewer(
+  BuildContext context,
+  Uint8List face, {
+  String? title,
+}) {
+  return Navigator.of(context).push(
+    PageRouteBuilder<void>(
+      opaque: false,
+      barrierColor: Colors.black87,
+      barrierDismissible: true,
+      pageBuilder: (context, _, _) => GestureDetector(
+        onTap: () => Navigator.of(context).pop(),
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            foregroundColor: Colors.white,
+            title: title == null ? null : Text(title),
+          ),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: InteractiveViewer(
+                maxScale: 4,
+                child: Hero(
+                  tag: face,
+                  child: ClipOval(
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: Image.memory(
+                        face,
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+      transitionsBuilder: (context, anim, _, child) =>
+          FadeTransition(opacity: anim, child: child),
+    ),
+  );
 }

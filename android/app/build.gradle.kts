@@ -55,9 +55,12 @@ android {
         if (keystorePath != null && file(keystorePath).exists()) {
             create("release") {
                 storeFile = file(keystorePath)
-                storePassword = signingValue("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias = signingValue("ANDROID_KEY_ALIAS")
-                keyPassword = signingValue("ANDROID_KEY_PASSWORD")
+                // Alias defaults to "flock" and the key password to the
+                // keystore password, so CI only needs two secrets.
+                val storePass = signingValue("ANDROID_KEYSTORE_PASSWORD")
+                storePassword = storePass
+                keyAlias = signingValue("ANDROID_KEY_ALIAS") ?: "flock"
+                keyPassword = signingValue("ANDROID_KEY_PASSWORD") ?: storePass
             }
         }
     }

@@ -28,7 +28,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _map = FamilyMapController();
   final _sheet = DraggableScrollableController();
-  double _sheetFraction = _kSheetInitial;
+  double _sheetFraction = _kSheetHalf;
 
   String? _selected;
   bool _didInitialFit = false;
@@ -42,9 +42,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<TimelineEntry> _timeline = const [];
   int _historyRequest = 0;
 
-  static const _kSheetMin = 0.12;
-  static const _kSheetInitial = 0.34;
+  // Sheet stops. The lowest one is measured in pixels so it always shows
+  // exactly the header plus one person, sitting clear of the gesture bar.
+  // The others are fractions of the screen.
+  static const _kPeekPx = 67.0 + 84; // grabber and title + one row
+  static const _kSheetHalf = 0.45;
   static const _kSheetMax = 0.88;
+  double _screenH = 800;
+  double _bottomPad = 0;
+
+  double get _sheetMin =>
+      ((_kPeekPx + _bottomPad) / _screenH).clamp(0.1, _kSheetHalf - 0.05);
+
+  // Kept as one list so the sheet doesn't see "new" stops on every rebuild,
+  // which would make it reset mid-drag.
+  List<double> _snaps = const [];
+  List<double> get _snapSizes {
+    final min = _sheetMin;
+    if (_snaps.isEmpty || _snaps.first != min) {
+      _snaps = [min, _kSheetHalf, _kSheetMax];
+    }
+    return _snaps;
+  }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -79,9 +98,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _dayOffset = 0;
     });
     if (moveMap && p.last != null) _map.focus(p.last!.latLng);
-    if (_sheet.isAttached && _sheet.size < _kSheetInitial) {
+    if (_sheet.isAttached && _sheet.size < _kSheetHalf - 0.01) {
       _sheet.animateTo(
-        _kSheetInitial,
+        _kSheetHalf,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOut,
       );
@@ -129,10 +148,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _historyLoading = false;
       });
       if (fixes.isNotEmpty) _map.fit(fixes.map((f) => f.latLng).toList());
-      if (_sheet.isAttached && _sheet.size < 0.5) {
+      if (_sheet.isAttached && _sheet.size < _kSheetHalf - 0.01) {
         unawaited(
           _sheet.animateTo(
-            0.5,
+            _kSheetHalf,
             duration: const Duration(milliseconds: 250),
             curve: Curves.easeOut,
           ),
@@ -155,6 +174,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final people = app.people;
     final selected = _selected == null ? null : app.personByTopic(_selected!);
     final media = MediaQuery.of(context);
+    _screenH = media.size.height;
+    _bottomPad = media.viewPadding.bottom;
     final sheetPx = media.size.height * _sheetFraction;
 
     // On first data, frame everyone.
@@ -175,7 +196,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           Positioned.fill(
             child: FamilyMap(
-              provider: app.settings.mapProvider,
+              provider: app.mapProvider,
+              style: app.settings.mapStyle,
               controller: _map,
               people: people,
               selectedTopic: _selected,
@@ -254,11 +276,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
           DraggableScrollableSheet(
             controller: _sheet,
-            initialChildSize: _kSheetInitial,
-            minChildSize: _kSheetMin,
+            initialChildSize: _kSheetHalf,
+            minChildSize: _sheetMin,
             maxChildSize: _kSheetMax,
             snap: true,
-            snapSizes: const [_kSheetMin, _kSheetInitial, 0.5, _kSheetMax],
+            snapSizes: _snapSizes,
             builder: (context, scroll) {
               return _SheetSurface(
                 child: selected == null
@@ -520,8 +542,6 @@ class _PeopleList extends StatelessWidget {
             icon: Icons.location_off_rounded,
             text: 'You\'re not sharing your location. Turn it on in Settings.',
           ),
-        if (people.isEmpty || (people.length == 1 && me != null))
-          const _EmptyPeople(),
         for (final p in people)
           _PersonRow(
             person: p,
@@ -529,6 +549,8 @@ class _PeopleList extends StatelessWidget {
             onTap: () => onTap(p),
             me: me,
           ),
+        if (people.isEmpty || (people.length == 1 && me != null))
+          const _EmptyPeople(),
       ],
     );
   }
@@ -794,7 +816,7 @@ class _PersonDetail extends StatelessWidget {
                 icon: const Icon(Icons.arrow_back_rounded),
                 tooltip: 'Back to everyone',
               ),
-              Avatar.person(person, size: 56),
+              Avatar.person(person, size: 56, enlargeable: true),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(

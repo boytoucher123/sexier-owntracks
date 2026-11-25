@@ -5,11 +5,12 @@ import 'package:provider/provider.dart';
 
 import '../models/settings.dart';
 import '../services/mqtt_service.dart';
-import '../services/platform_services.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
 import '../widgets/connection_form.dart';
+import '../widgets/family_map.dart';
+import 'photo_crop_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -355,73 +356,69 @@ class _MapChoice extends StatelessWidget {
   const _MapChoice({required this.app});
   final AppState app;
 
+  static const _labels = {
+    MapStyle.satellite: ('Satellite', Icons.satellite_alt_rounded),
+    MapStyle.streets: ('Streets', Icons.map_rounded),
+    MapStyle.terrain: ('Terrain', Icons.terrain_rounded),
+    MapStyle.dark: ('Dark', Icons.dark_mode_rounded),
+  };
+
   @override
   Widget build(BuildContext context) {
     final s = app.settings;
-    return FutureBuilder<bool>(
-      future: MapAvailability.googleMapsAvailable(),
-      builder: (context, snap) {
-        final google = snap.data ?? false;
-        return Column(
-          children: [
-            RadioGroup<MapProvider>(
-              groupValue: s.mapProvider,
-              onChanged: (v) => _choose(context, v!),
-              child: Column(
-                children: [
-                  const RadioListTile<MapProvider>(
-                    value: MapProvider.standard,
-                    title: Text('Standard'),
-                    subtitle: Text(
-                      'OpenStreetMap. Free, no Google account needed.',
-                    ),
-                  ),
-                  RadioListTile<MapProvider>(
-                    value: MapProvider.google,
-                    enabled: google,
-                    title: const Text('Google Maps'),
-                    subtitle: Text(
-                      google
-                          ? 'Familiar Google look. Map views go through Google.'
-                          : 'Not available in this build (no Google Maps key).',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _choose(BuildContext context, MapProvider v) async {
-    if (v == MapProvider.google &&
-        app.settings.mapProvider != MapProvider.google) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Use Google Maps?'),
-          content: const Text(
-            'Google Maps loads map tiles from Google, so Google can see which areas '
-            'you look at. Everyone\'s locations still only go to your own server.',
+    final google = app.googleMapsAvailable;
+    final provider = app.mapProvider;
+    final styles = mapStylesFor(provider);
+    final style = effectiveMapStyle(provider, s.mapStyle);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final st in styles)
+                ChoiceChip(
+                  showCheckmark: false,
+                  avatar: Icon(_labels[st]!.$2, size: 18),
+                  label: Text(_labels[st]!.$1),
+                  selected: st == style,
+                  onSelected: (_) =>
+                      app.updateSettings(app.settings.copyWith(mapStyle: st)),
+                ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Use Google Maps'),
-            ),
-          ],
         ),
-      );
-      if (ok != true) return;
-    }
-    await app.updateSettings(app.settings.copyWith(mapProvider: v));
+        RadioGroup<MapProvider>(
+          groupValue: provider,
+          onChanged: (v) =>
+              app.updateSettings(app.settings.copyWith(mapProvider: v)),
+          child: Column(
+            children: [
+              RadioListTile<MapProvider>(
+                value: MapProvider.google,
+                enabled: google,
+                title: const Text('Google Maps'),
+                subtitle: Text(
+                  google
+                      ? 'The familiar Google look, with satellite and terrain.'
+                      : 'Not available in this build (no Google Maps key).',
+                ),
+              ),
+              const RadioListTile<MapProvider>(
+                value: MapProvider.standard,
+                title: Text('OpenStreetMap'),
+                subtitle: Text(
+                  'No Google involved. Satellite photos come from Esri.',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -448,12 +445,16 @@ class _ProfileSheetState extends State<_ProfileSheet> {
   Future<void> _pick(ImageSource src) async {
     final x = await ImagePicker().pickImage(
       source: src,
-      maxWidth: 1024,
-      maxHeight: 1024,
+      maxWidth: 2048,
+      maxHeight: 2048,
       preferredCameraDevice: CameraDevice.front,
     );
     if (x == null) return;
-    await app.setMyPhoto(await x.readAsBytes());
+    final bytes = await x.readAsBytes();
+    if (!mounted) return;
+    final cropped = await PhotoCropScreen.open(context, bytes);
+    if (cropped == null) return;
+    await app.setMyPhoto(cropped);
     if (mounted) setState(() {});
   }
 
@@ -477,6 +478,8 @@ class _ProfileSheetState extends State<_ProfileSheet> {
               initials: _tid.text.isEmpty ? '?' : _tid.text.toUpperCase(),
               face: face,
               size: 96,
+              enlargeable: true,
+              label: 'Your photo',
             ),
           ),
           const SizedBox(height: 8),
