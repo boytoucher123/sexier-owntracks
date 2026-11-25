@@ -6,9 +6,11 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flock/config/server_config.dart';
 import 'package:flock/models/settings.dart';
 import 'package:flock/services/mqtt_service.dart';
 import 'package:flock/services/owntracks_protocol.dart';
+import 'package:flock/services/recorder_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -236,6 +238,8 @@ void main() {
     final host = Platform.environment['FLOCK_REAL_HOST'] ?? 'localhost';
     AppSettings real() => AppSettings(
       host: host,
+      username: Platform.environment['FLOCK_REAL_USER'] ?? kDefaultUsername,
+      recorderUrl: 'https://$host:8443',
       password: pass ?? '',
       deviceName: 'FlockTest',
       trackerId: 'FT',
@@ -272,6 +276,34 @@ void main() {
       );
       expect(r.success, isFalse);
       expect(r.message, contains('different address'));
+    }, skip: realSkip);
+
+    test('history: fetches with the shared login over verified TLS', () async {
+      final fixes = await RecorderService().history(
+        real(),
+        user: 'class-of-2024',
+        device: 'george',
+        from: DateTime.now().subtract(const Duration(days: 1)),
+      );
+      expect(fixes, isA<List<Object>>());
+    }, skip: realSkip);
+
+    test('history: a wrong password is rejected in plain English', () async {
+      await expectLater(
+        RecorderService().history(
+          real().copyWith(password: 'wrong'),
+          user: 'class-of-2024',
+          device: 'george',
+          from: DateTime.now().subtract(const Duration(hours: 1)),
+        ),
+        throwsA(
+          isA<RecorderException>().having(
+            (e) => e.message,
+            'message',
+            contains('rejected the login'),
+          ),
+        ),
+      );
     }, skip: realSkip);
   });
 }

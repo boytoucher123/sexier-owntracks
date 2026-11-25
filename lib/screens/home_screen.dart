@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../config/server_config.dart';
 import '../models/person.dart';
 import '../services/mqtt_service.dart';
 import '../services/platform_services.dart';
@@ -1028,7 +1029,7 @@ class _DayPicker extends StatelessWidget {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-        itemCount: 7,
+        itemCount: kHistoryDays,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, i) => ChoiceChip(
           label: Text(dayLabel(now.subtract(Duration(days: i)))),

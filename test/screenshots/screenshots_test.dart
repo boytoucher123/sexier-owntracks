@@ -449,7 +449,13 @@ void main() {
         ..g = 90 + px.y * 120 ~/ 600
         ..b = 200 - px.x * 120 ~/ 900;
     }
-    img.fillCircle(photo, x: 450, y: 260, radius: 150, color: img.ColorRgb8(250, 210, 170));
+    img.fillCircle(
+      photo,
+      x: 450,
+      y: 260,
+      radius: 150,
+      color: img.ColorRgb8(250, 210, 170),
+    );
     final bytes = Uint8List.fromList(img.encodePng(photo));
     final nav = Navigator.of(t.element(find.byType(Scaffold).first));
     unawaited(PhotoCropScreen.open(nav.context, bytes));

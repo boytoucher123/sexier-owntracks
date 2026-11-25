@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -385,13 +384,6 @@ class MqttService {
     }
     return client;
   }
-
-  /// The phone's normal trusted roots plus our server's private CA, so the
-  /// server's certificate verifies without disabling any checks.
-  @visibleForTesting
-  static SecurityContext serverSecurityContext() =>
-      SecurityContext(withTrustedRoots: true)
-        ..setTrustedCertificatesBytes(utf8.encode(kServerCaPem));
 
   /// Prefer the broker's own refusal reason (e.g. bad password) over the
   /// generic exception mqtt_client throws when a handshake is refused.

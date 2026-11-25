@@ -24,7 +24,8 @@ const cartoApiKey = String.fromEnvironment('CARTO_API_KEY');
 @visibleForTesting
 String cartoTileUrl({required bool dark, String key = cartoApiKey}) {
   final style = dark ? 'dark_all' : 'voyager';
-  final url = 'https://basemaps.cartocdn.com/rastertiles/$style/{z}/{x}/{y}{r}.png';
+  final url =
+      'https://basemaps.cartocdn.com/rastertiles/$style/{z}/{x}/{y}{r}.png';
   if (key.isEmpty) return url;
   return '$url?key=${Uri.encodeQueryComponent(key)}';
 }
@@ -38,7 +39,8 @@ const esriLabelsUrl =
 
 /// Styles each map can draw. Terrain is Google-only; the standard map
 /// shows streets instead.
-List<MapStyle> mapStylesFor(MapProvider provider) => provider == MapProvider.google
+List<MapStyle> mapStylesFor(MapProvider provider) =>
+    provider == MapProvider.google
     ? MapStyle.values
     : const [MapStyle.satellite, MapStyle.streets, MapStyle.dark];
 

@@ -53,7 +53,7 @@ class AppSettings {
     this.trackerId = '',
     this.displayName = '',
     this.baseTopic = 'owntracks',
-    this.recorderUrl = '',
+    this.recorderUrl = kDefaultRecorderUrl,
     this.recorderUsername = '',
     this.recorderPassword = '',
     this.trackingMode = TrackingMode.balanced,
@@ -194,7 +194,10 @@ class AppSettings {
       trackerId: pick('trackerId', ''),
       displayName: pick('displayName', ''),
       baseTopic: pick('baseTopic', 'owntracks'),
-      recorderUrl: pick('recorderUrl', ''),
+      // Saved before history was set up? Use the server's history address.
+      recorderUrl: pick('recorderUrl', '').trim().isEmpty
+          ? kDefaultRecorderUrl
+          : pick('recorderUrl', ''),
       recorderUsername: pick('recorderUsername', ''),
       recorderPassword: recorderPassword,
       trackingMode: TrackingMode.values.firstWhere(

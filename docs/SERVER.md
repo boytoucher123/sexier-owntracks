@@ -15,7 +15,7 @@ No passwords are kept in this repo.
 | WebSockets | Off (the broker has no WebSocket listener) |
 | Username | `class_of_2024` (pre-filled, shared by everyone) |
 | Password | ask the server owner |
-| Recorder URL | leave empty for now: the Recorder only listens on the server itself |
+| Recorder URL | `https://owntracks-class-of-2024.duckdns.org:8443` (pre-filled; uses the same login) |
 
 Each person's name becomes the device in `owntracks/class_of_2024/<Name>`.
 
@@ -26,6 +26,21 @@ Each person's name becomes the device in `owntracks/class_of_2024/<Name>`.
 - `allow_anonymous false` with a password file. There is **no ACL file**, so any
   logged-in user can read and write every topic. That is fine for one shared login.
 - The public IP is dynamic. DuckDNS keeps the hostname pointed at it.
+
+## History (Recorder)
+
+- ot-recorder stores every location it sees on MQTT and serves an HTTP API on
+  `127.0.0.1:8083` only.
+- **Caddy** publishes it on **`8443`** (HTTPS, same certificate as MQTT). The
+  router forwards TCP 8443 to the server.
+- **Login is the MQTT login.** Caddy asks a small local checker
+  (`owntracks-authcheck`), which verifies Basic credentials against mosquitto's own
+  password file. There is no second password, and changing an MQTT password
+  changes the history one too. Ten wrong passwords from one IP block it for 15 minutes.
+- **Read-only:** only `GET /api/0/locations`, `/last`, `/list` and `/version`
+  get through. The web UI and everything else return 404.
+- **Retention:** `owntracks-prune` runs hourly and deletes points older than
+  4 days. The app offers today and the two days before.
 
 ## Certificates
 
