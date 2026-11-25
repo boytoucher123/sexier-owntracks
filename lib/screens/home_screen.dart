@@ -1,22 +1,19 @@
 // ignore_for_file: deprecated_member_use
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../config/server_config.dart';
 import '../models/person.dart';
 import '../services/mqtt_service.dart';
 import '../services/platform_services.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../util/format.dart';
-import '../util/timeline.dart';
 import '../widgets/avatar.dart';
 import '../widgets/family_map.dart';
+import 'history_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -33,15 +30,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String? _selected;
   bool _didInitialFit = false;
-
-  // History for the selected person.
-  int _dayOffset = 0; // 0 = today, 1 = yesterday ...
-  bool _showHistory = false;
-  bool _historyLoading = false;
-  String? _historyError;
-  List<LocationFix> _history = const [];
-  List<TimelineEntry> _timeline = const [];
-  int _historyRequest = 0;
 
   // Sheet stops. The lowest one is measured in pixels so it always shows
   // exactly the header plus one person, sitting clear of the gesture bar.
@@ -92,11 +80,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _select(Person p, {bool moveMap = true}) {
     setState(() {
       _selected = p.topic;
-      _showHistory = false;
-      _history = const [];
-      _timeline = const [];
-      _historyError = null;
-      _dayOffset = 0;
     });
     if (moveMap && p.last != null) _map.focus(p.last!.latLng);
     if (_sheet.isAttached && _sheet.size < _kSheetHalf - 0.01) {
@@ -112,9 +95,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_selected == null) return;
     setState(() {
       _selected = null;
-      _showHistory = false;
-      _history = const [];
-      _timeline = const [];
     });
   }
 
@@ -123,50 +103,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       for (final p in people)
         if (p.last != null) p.last!.latLng,
     ]);
-  }
-
-  Future<void> _loadHistory(Person p, int dayOffset) async {
-    final req = ++_historyRequest;
-    setState(() {
-      _showHistory = true;
-      _dayOffset = dayOffset;
-      _historyLoading = true;
-      _historyError = null;
-    });
-    final now = DateTime.now();
-    final dayStart = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).subtract(Duration(days: dayOffset));
-    final dayEnd = dayOffset == 0 ? now : dayStart.add(const Duration(days: 1));
-    try {
-      final fixes = await context.read<AppState>().history(p, dayStart, dayEnd);
-      if (!mounted || req != _historyRequest) return;
-      setState(() {
-        _history = fixes;
-        _timeline = buildTimeline(fixes).reversed.toList();
-        _historyLoading = false;
-      });
-      if (fixes.isNotEmpty) _map.fit(fixes.map((f) => f.latLng).toList());
-      if (_sheet.isAttached && _sheet.size < _kSheetHalf - 0.01) {
-        unawaited(
-          _sheet.animateTo(
-            _kSheetHalf,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          ),
-        );
-      }
-    } on Object catch (e) {
-      if (!mounted || req != _historyRequest) return;
-      setState(() {
-        _historyLoading = false;
-        _historyError = e.toString();
-        _history = const [];
-        _timeline = const [];
-      });
-    }
   }
 
   @override
@@ -185,13 +121,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       WidgetsBinding.instance.addPostFrameCallback((_) => _fitEveryone(people));
     }
 
-    final trail = _showHistory && selected != null
-        ? _history.map((f) => f.latLng).toList()
-        : const <LatLng>[];
-    final stops = _showHistory
-        ? _timeline.whereType<Stay>().map((s) => s.center).toList()
-        : const <LatLng>[];
-
     return Scaffold(
       body: Stack(
         children: [
@@ -202,11 +131,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               controller: _map,
               people: people,
               selectedTopic: _selected,
-              trail: trail,
-              trailStops: stops,
-              trailColor: selected == null
-                  ? null
-                  : FlockColors.forKey(selected.topic),
               onPersonTap: (p) => _select(p, moveMap: false),
               onMapTap: _clearSelection,
               bottomInset: sheetPx,
@@ -296,13 +220,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         person: selected,
                         app: app,
                         onBack: _clearSelection,
-                        showHistory: _showHistory,
-                        dayOffset: _dayOffset,
-                        historyLoading: _historyLoading,
-                        historyError: _historyError,
-                        timeline: _timeline,
-                        onDay: (d) => _loadHistory(selected, d),
-                        onFocus: (p) => _map.focus(p, zoom: 16),
                       ),
               );
             },
@@ -772,26 +689,12 @@ class _PersonDetail extends StatelessWidget {
     required this.person,
     required this.app,
     required this.onBack,
-    required this.showHistory,
-    required this.dayOffset,
-    required this.historyLoading,
-    required this.historyError,
-    required this.timeline,
-    required this.onDay,
-    required this.onFocus,
   });
 
   final ScrollController scroll;
   final Person person;
   final AppState app;
   final VoidCallback onBack;
-  final bool showHistory;
-  final int dayOffset;
-  final bool historyLoading;
-  final String? historyError;
-  final List<TimelineEntry> timeline;
-  final ValueChanged<int> onDay;
-  final ValueChanged<LatLng> onFocus;
 
   @override
   Widget build(BuildContext context) {
@@ -917,50 +820,15 @@ class _PersonDetail extends StatelessWidget {
               _ActionButton(
                 icon: Icons.history_rounded,
                 label: 'History',
-                selected: showHistory,
-                onTap: () => onDay(0),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => HistoryScreen(person: person),
+                  ),
+                ),
               ),
             ],
           ),
         ),
-        if (showHistory) ...[
-          const SizedBox(height: 8),
-          _DayPicker(selected: dayOffset, onDay: onDay),
-          if (!app.settings.hasRecorder)
-            const _HistoryMessage(
-              icon: Icons.history_toggle_off_rounded,
-              text:
-                  'History needs your OwnTracks Recorder address. Add it in '
-                  'Settings → Location history.',
-            )
-          else if (historyLoading)
-            const Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (historyError != null)
-            _HistoryMessage(icon: Icons.cloud_off_rounded, text: historyError!)
-          else if (timeline.isEmpty)
-            const _HistoryMessage(
-              icon: Icons.nightlight_round,
-              text: 'No movement recorded for this day.',
-            )
-          else
-            for (var i = 0; i < timeline.length; i++)
-              _TimelineTile(
-                entry: timeline[i],
-                color: color,
-                isFirst: i == 0,
-                isLast: i == timeline.length - 1,
-                onTap: () {
-                  final e = timeline[i];
-                  onFocus(switch (e) {
-                    Stay s => s.center,
-                    Trip tr => tr.path[tr.path.length ~/ 2],
-                  });
-                },
-              ),
-        ],
       ],
     );
   }
@@ -971,19 +839,17 @@ class _ActionButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
-    this.selected = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onTap;
-  final bool selected;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bg = selected ? cs.primary : cs.primary.withOpacity(0.10);
-    final fg = selected ? cs.onPrimary : cs.primary;
+    final bg = cs.primary.withOpacity(0.10);
+    final fg = cs.primary;
     return Expanded(
       child: Material(
         color: onTap == null ? cs.onSurface.withOpacity(0.05) : bg,
@@ -1010,172 +876,6 @@ class _ActionButton extends StatelessWidget {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DayPicker extends StatelessWidget {
-  const _DayPicker({required this.selected, required this.onDay});
-  final int selected;
-  final ValueChanged<int> onDay;
-
-  @override
-  Widget build(BuildContext context) {
-    final now = DateTime.now();
-    return SizedBox(
-      height: 48,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-        itemCount: kHistoryDays,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, i) => ChoiceChip(
-          label: Text(dayLabel(now.subtract(Duration(days: i)))),
-          selected: selected == i,
-          onSelected: (_) => onDay(i),
-          showCheckmark: false,
-        ),
-      ),
-    );
-  }
-}
-
-class _HistoryMessage extends StatelessWidget {
-  const _HistoryMessage({required this.icon, required this.text});
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(32, 24, 32, 16),
-      child: Column(
-        children: [
-          Icon(icon, size: 36, color: cs.onSurfaceVariant),
-          const SizedBox(height: 8),
-          Text(
-            text,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: cs.onSurfaceVariant),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TimelineTile extends StatelessWidget {
-  const _TimelineTile({
-    required this.entry,
-    required this.color,
-    required this.isFirst,
-    required this.isLast,
-    required this.onTap,
-  });
-
-  final TimelineEntry entry;
-  final Color color;
-  final bool isFirst;
-  final bool isLast;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    final e = entry;
-    final isStay = e is Stay;
-    final times =
-        '${TimeOfDay.fromDateTime(e.start).format(context)} – ${TimeOfDay.fromDateTime(e.end).format(context)}';
-
-    return InkWell(
-      onTap: onTap,
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(width: 28),
-            SizedBox(
-              width: 24,
-              child: Column(
-                children: [
-                  Expanded(
-                    child: Container(
-                      width: 3,
-                      color: isFirst
-                          ? Colors.transparent
-                          : color.withOpacity(0.35),
-                    ),
-                  ),
-                  Container(
-                    width: isStay ? 16 : 10,
-                    height: isStay ? 16 : 10,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isStay ? Colors.white : color,
-                      border: Border.all(color: color, width: isStay ? 4 : 0),
-                    ),
-                  ),
-                  Expanded(
-                    child: Container(
-                      width: 3,
-                      color: isLast
-                          ? Colors.transparent
-                          : color.withOpacity(0.35),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (e is Stay)
-                      FutureBuilder<String?>(
-                        future: AddressLookup.lookup(
-                          e.center.latitude,
-                          e.center.longitude,
-                        ),
-                        initialData: AddressLookup.cached(
-                          e.center.latitude,
-                          e.center.longitude,
-                        ),
-                        builder: (_, s) => Text(
-                          s.data ?? 'A place',
-                          style: t.titleMedium,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      )
-                    else if (e is Trip)
-                      Row(
-                        children: [
-                          Icon(Icons.route_rounded, size: 18, color: color),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Travelled ${formatDistance(e.distanceMeters)}',
-                            style: t.titleSmall,
-                          ),
-                        ],
-                      ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '$times · ${formatDuration(e.duration)}',
-                      style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 20),
-          ],
         ),
       ),
     );

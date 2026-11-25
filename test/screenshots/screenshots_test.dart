@@ -22,6 +22,7 @@ import 'package:flock/services/recorder_service.dart';
 import 'package:flock/services/settings_store.dart';
 import 'package:flock/state/app_state.dart';
 import 'package:flock/widgets/family_map.dart';
+import 'package:flock/widgets/history_joystick.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -409,7 +410,8 @@ void main() {
 
     await t.tap(find.text('Continue'));
     await _settle(t);
-    await t.tap(find.text('Skip for now'));
+    // History is pre-filled for this server, so the button says Continue.
+    await t.tap(find.text('Continue'));
     await _shot(t, '04-location');
   }, skip: skip != null);
 
@@ -423,8 +425,19 @@ void main() {
 
     await t.tap(find.text('History'));
     await _settle(t);
-    await t.drag(find.text('History'), const Offset(0, -250));
     await _shot(t, '07-history');
+
+    // Tap a point on the way to coffee: its time and address show.
+    await t.tap(find.byType(TrailDot).at(2), warnIfMissed: false);
+    await _shot(t, '12-history-point');
+
+    // Hold the joystick to the left: travelling back through the day.
+    final g = await t.startGesture(t.getCenter(find.byType(HistoryJoystick)));
+    await g.moveBy(const Offset(-30, 0));
+    await g.moveBy(const Offset(-50, 0));
+    await t.pump(const Duration(milliseconds: 200));
+    await _shot(t, '13-history-joystick');
+    await g.up();
     expect(state.people.length, 4);
   }, skip: skip != null);
 

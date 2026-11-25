@@ -1,6 +1,7 @@
 // ignore_for_file: deprecated_member_use
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart' as fm;
@@ -59,12 +60,19 @@ class FamilyMapController {
     if (points.length == 1) return focus(points.first);
     _delegate?.fit(points);
   }
+
+  /// Pans (keeping the zoom) only if [point] is near the edge or off screen.
+  void ensureVisible(LatLng point) => _delegate?.ensureVisible(point);
 }
 
 abstract class _MapDelegate {
   void focus(LatLng point, double zoom);
   void fit(List<LatLng> points);
+  void ensureVisible(LatLng point);
 }
+
+/// How close to the visible edge (in logical pixels) counts as "near the edge".
+const double _kEdgeMargin = 56;
 
 /// The map with everyone's pins, plus an optional history trail.
 class FamilyMap extends StatelessWidget {
@@ -79,6 +87,10 @@ class FamilyMap extends StatelessWidget {
     this.trail = const [],
     this.trailStops = const [],
     this.trailColor,
+    this.nodes = const [],
+    this.selectedNode,
+    this.onNodeTap,
+    this.markStale = true,
     this.onMapTap,
     this.bottomInset = 0,
     this.topInset = 0,
@@ -96,6 +108,17 @@ class FamilyMap extends StatelessWidget {
   final List<LatLng> trail;
   final List<LatLng> trailStops;
   final Color? trailColor;
+
+  /// Small tappable dots along the trail (history points).
+  final List<LatLng> nodes;
+
+  /// Index into [nodes] drawn larger, or null.
+  final int? selectedNode;
+  final ValueChanged<int>? onNodeTap;
+
+  /// Grey out pins whose location is old. Off for history, where every
+  /// position is old on purpose.
+  final bool markStale;
   final ValueChanged<Person> onPersonTap;
   final VoidCallback? onMapTap;
 
@@ -178,6 +201,20 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
   });
 
   @override
+  void ensureVisible(LatLng point) => _run(() {
+    final cam = _mc.camera;
+    final o = cam.getOffsetFromOrigin(point);
+    final s = cam.nonRotatedSize;
+    final m = widget.map;
+    if (o.dx < _kEdgeMargin ||
+        o.dx > s.width - _kEdgeMargin ||
+        o.dy < m.topInset + _kEdgeMargin ||
+        o.dy > s.height - m.bottomInset - _kEdgeMargin) {
+      focus(point, cam.zoom);
+    }
+  });
+
+  @override
   Widget build(BuildContext context) {
     final m = widget.map;
     final style = effectiveMapStyle(MapProvider.standard, m.style);
@@ -249,6 +286,27 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
                 ),
             ],
           ),
+        if (m.nodes.isNotEmpty)
+          fm.MarkerLayer(
+            markers: [
+              for (var i = 0; i < m.nodes.length; i++)
+                fm.Marker(
+                  point: m.nodes[i],
+                  width: 28,
+                  height: 28,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: m.onNodeTap == null ? null : () => m.onNodeTap!(i),
+                    child: Center(
+                      child: TrailDot(
+                        color: trailColor,
+                        selected: i == m.selectedNode,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         fm.MarkerLayer(
           markers: [
             for (final p in widget.visible)
@@ -263,7 +321,7 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
                   child: MapPin(
                     person: p,
                     selected: p.topic == m.selectedTopic,
-                    stale: isStale(p.last!.timestamp),
+                    stale: m.markStale && isStale(p.last!.timestamp),
                   ),
                 ),
               ),
@@ -304,6 +362,9 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
   final _controller = Completer<gm.GoogleMapController>();
   final Map<String, gm.BitmapDescriptor> _icons = {};
   final Map<String, String> _iconKeys = {};
+  final Map<String, gm.BitmapDescriptor> _dots = {};
+  Size _size = Size.zero;
+  bool _following = false;
 
   @override
   void initState() {
@@ -349,10 +410,47 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
     );
   }
 
+  @override
+  void ensureVisible(LatLng point) async {
+    if (_following || _size.isEmpty) return;
+    _following = true;
+    try {
+      final c = await _controller.future;
+      final r = await c.getVisibleRegion();
+      final n = r.northeast.latitude, s = r.southwest.latitude;
+      final e = r.northeast.longitude, w = r.southwest.longitude;
+      if (n == s || e == w) return;
+      final x = (point.longitude - w) / (e - w) * _size.width;
+      final y = (n - point.latitude) / (n - s) * _size.height;
+      final m = widget.map;
+      if (x < _kEdgeMargin ||
+          x > _size.width - _kEdgeMargin ||
+          y < m.topInset + _kEdgeMargin ||
+          y > _size.height - m.bottomInset - _kEdgeMargin) {
+        await c.animateCamera(gm.CameraUpdate.newLatLng(_g(point)));
+      }
+    } finally {
+      _following = false;
+    }
+  }
+
+  /// Dot icons for history points, drawn once per colour and kind.
+  gm.BitmapDescriptor? _dot(Color color, _DotKind kind, double ratio) {
+    final key = '${color.toARGB32()}:${kind.name}';
+    final have = _dots[key];
+    if (have != null) return have;
+    _renderDotBitmap(color, kind, ratio).then((bytes) {
+      final size = kind.size;
+      _dots[key] = gm.BitmapDescriptor.bytes(bytes, width: size, height: size);
+      if (mounted) setState(() {});
+    });
+    return null;
+  }
+
   Future<void> _refreshIcons() async {
     final ratio = MediaQuery.devicePixelRatioOf(context);
     for (final p in widget.visible) {
-      final stale = isStale(p.last!.timestamp);
+      final stale = widget.map.markStale && isStale(p.last!.timestamp);
       final key = '${p.face?.length ?? 0}:${p.initials}:$stale';
       if (_iconKeys[p.topic] == key) continue;
       _iconKeys[p.topic] = key;
@@ -378,6 +476,26 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
     final first = widget.visible.isNotEmpty
         ? widget.visible.first.last!.latLng
         : null;
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    final stopIcon = _dot(trailColor, _DotKind.stop, ratio);
+    final nodeIcon = _dot(trailColor, _DotKind.node, ratio);
+    final selIcon = _dot(trailColor, _DotKind.selected, ratio);
+    return LayoutBuilder(
+      builder: (context, box) {
+        _size = box.biggest;
+        return _buildMap(m, trailColor, first, stopIcon, nodeIcon, selIcon);
+      },
+    );
+  }
+
+  Widget _buildMap(
+    FamilyMap m,
+    Color trailColor,
+    LatLng? first,
+    gm.BitmapDescriptor? stopIcon,
+    gm.BitmapDescriptor? nodeIcon,
+    gm.BitmapDescriptor? selIcon,
+  ) {
     return gm.GoogleMap(
       initialCameraPosition: gm.CameraPosition(
         target: first != null ? _g(first) : const gm.LatLng(-33.8688, 151.2093),
@@ -416,10 +534,25 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
             position: _g(m.trailStops[i]),
             anchor: const Offset(0.5, 0.5),
             flat: true,
-            icon: gm.BitmapDescriptor.defaultMarkerWithHue(
-              HSVColor.fromColor(trailColor).hue,
-            ),
+            consumeTapEvents: true,
+            icon:
+                stopIcon ??
+                gm.BitmapDescriptor.defaultMarkerWithHue(
+                  HSVColor.fromColor(trailColor).hue,
+                ),
           ),
+        if (nodeIcon != null)
+          for (var i = 0; i < m.nodes.length; i++)
+            gm.Marker(
+              markerId: gm.MarkerId('node$i'),
+              position: _g(m.nodes[i]),
+              anchor: const Offset(0.5, 0.5),
+              flat: true,
+              consumeTapEvents: true,
+              zIndexInt: i == m.selectedNode ? 3 : 2,
+              icon: i == m.selectedNode ? (selIcon ?? nodeIcon) : nodeIcon,
+              onTap: m.onNodeTap == null ? null : () => m.onNodeTap!(i),
+            ),
       },
       polylines: {
         if (m.trail.length > 1)
@@ -432,6 +565,68 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
       },
     );
   }
+}
+
+enum _DotKind {
+  node(14),
+  selected(22),
+  stop(18);
+
+  const _DotKind(this.size);
+  final double size;
+}
+
+/// A history point: a filled dot with a white rim, bigger when selected.
+class TrailDot extends StatelessWidget {
+  const TrailDot({super.key, required this.color, this.selected = false});
+  final Color color;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = selected ? _DotKind.selected.size : _DotKind.node.size;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: selected ? 3 : 2),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
+      ),
+    );
+  }
+}
+
+/// PNG for a Google Maps dot marker, matching [TrailDot] (or a ring for stops).
+Future<Uint8List> _renderDotBitmap(
+  Color color,
+  _DotKind kind,
+  double ratio,
+) async {
+  final px = (kind.size * ratio).ceilToDouble();
+  final rec = ui.PictureRecorder();
+  final canvas = Canvas(rec);
+  final c = Offset(px / 2, px / 2);
+  final r = px / 2;
+  canvas.drawCircle(c, r, Paint()..color = Colors.white);
+  if (kind == _DotKind.stop) {
+    canvas.drawCircle(
+      c,
+      r - 2.5 * ratio,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4 * ratio,
+    );
+  } else {
+    final rim = (kind == _DotKind.selected ? 3 : 2) * ratio;
+    canvas.drawCircle(c, r - rim, Paint()..color = color);
+  }
+  final image = await rec.endRecording().toImage(px.toInt(), px.toInt());
+  final data = await image.toByteData(format: ui.ImageByteFormat.png);
+  return data!.buffer.asUint8List();
 }
 
 const _darkStyle = '''
