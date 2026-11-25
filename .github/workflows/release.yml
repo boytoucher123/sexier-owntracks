@@ -50,8 +50,9 @@ jobs:
           cache: true
 
       # Optional repository secrets:
-      #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
-      #   ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD  -> stable release signing
+      #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD -> stable release
+      #     signing (ANDROID_KEY_ALIAS defaults to "flock", ANDROID_KEY_PASSWORD
+      #     to the keystore password)
       #   GOOGLE_API_KEY                           -> offer Google Maps
       #   CARTO_API_KEY                            -> keyed CARTO map tiles
       - name: Set up signing key

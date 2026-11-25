@@ -5,9 +5,11 @@ import 'package:image/image.dart' as img;
 
 import '../models/person.dart';
 import '../models/settings.dart';
+import '../screens/photo_crop_screen.dart' show kFaceSize;
 import '../services/location_service.dart';
 import '../services/mqtt_service.dart';
 import '../services/owntracks_protocol.dart';
+import '../services/platform_services.dart';
 import '../services/recorder_service.dart';
 import '../services/settings_store.dart';
 
@@ -36,6 +38,14 @@ class AppState extends ChangeNotifier {
 
   bool _loaded = false;
   bool get loaded => _loaded;
+
+  /// Whether this build has a Google Maps key.
+  bool _googleMaps = false;
+  bool get googleMapsAvailable => _googleMaps;
+
+  /// The map actually shown: Google Maps unless this build can't use it.
+  MapProvider get mapProvider =>
+      _googleMaps ? _settings.mapProvider : MapProvider.standard;
 
   String _clientSuffix = '';
 
@@ -71,6 +81,7 @@ class AppState extends ChangeNotifier {
     _settings = await _store.load();
     _myFace = await _store.loadFace();
     _clientSuffix = await _store.clientIdSuffix();
+    _googleMaps = await MapAvailability.googleMapsAvailable();
 
     mqtt.onConnected = _onConnected;
     mqtt.status.addListener(notifyListeners);
@@ -178,7 +189,8 @@ class AppState extends ChangeNotifier {
 
   // -------------------------------------------------------------- profile ---
 
-  /// Crops to a square, shrinks to 160 px and stores it as your photo.
+  /// Crops to a square (if it isn't one already), shrinks it to
+  /// [kFaceSize] px and stores it as your photo.
   Future<void> setMyPhoto(Uint8List? original) async {
     _myFace = original == null ? null : await compute(_shrinkFace, original);
     await _store.saveFace(_myFace);
@@ -376,9 +388,9 @@ Uint8List _shrinkFace(Uint8List bytes) {
   );
   final small = img.copyResize(
     square,
-    width: 160,
-    height: 160,
+    width: kFaceSize,
+    height: kFaceSize,
     interpolation: img.Interpolation.average,
   );
-  return Uint8List.fromList(img.encodeJpg(small, quality: 82));
+  return Uint8List.fromList(img.encodeJpg(small, quality: 85));
 }

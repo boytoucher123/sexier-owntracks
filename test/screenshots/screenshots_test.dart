@@ -13,6 +13,7 @@ import 'dart:ui' as ui;
 import 'package:flock/main.dart';
 import 'package:flock/models/person.dart';
 import 'package:flock/models/settings.dart';
+import 'package:flock/screens/photo_crop_screen.dart';
 import 'package:flock/services/location_service.dart';
 import 'package:flock/services/mqtt_service.dart';
 import 'package:flock/services/owntracks_protocol.dart';
@@ -425,6 +426,35 @@ void main() {
     await t.drag(find.text('History'), const Offset(0, -250));
     await _shot(t, '07-history');
     expect(state.people.length, 4);
+  }, skip: skip != null);
+
+  testWidgets('sheet lowered', (t) async {
+    final (_, mqtt) = await _boot(t, settings: _crew);
+    _populate(mqtt);
+    await _settle(t);
+    await t.timedDrag(
+      find.text('People'),
+      const Offset(0, 600),
+      const Duration(milliseconds: 600),
+    );
+    await _shot(t, '10-sheet-lowered');
+  }, skip: skip != null);
+
+  testWidgets('photo crop', (t) async {
+    await _boot(t, settings: _crew);
+    final photo = img.Image(width: 900, height: 600);
+    for (final px in photo) {
+      px
+        ..r = 60 + px.x * 180 ~/ 900
+        ..g = 90 + px.y * 120 ~/ 600
+        ..b = 200 - px.x * 120 ~/ 900;
+    }
+    img.fillCircle(photo, x: 450, y: 260, radius: 150, color: img.ColorRgb8(250, 210, 170));
+    final bytes = Uint8List.fromList(img.encodePng(photo));
+    final nav = Navigator.of(t.element(find.byType(Scaffold).first));
+    unawaited(PhotoCropScreen.open(nav.context, bytes));
+    await _settle(t, rounds: 10);
+    await _shot(t, '11-photo-crop');
   }, skip: skip != null);
 
   testWidgets('home dark', (t) async {

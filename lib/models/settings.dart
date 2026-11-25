@@ -16,11 +16,27 @@ enum TrackingMode {
 
 /// Which map tiles to draw.
 enum MapProvider {
-  /// Free OpenStreetMap-based tiles (CARTO Voyager). Works out of the box.
+  /// Free OpenStreetMap-based tiles (CARTO), with Esri imagery for satellite.
   standard,
 
-  /// Google Maps. Only offered when the build has a Google Maps API key.
+  /// Google Maps. The default when the build has a Google Maps API key;
+  /// builds without one fall back to [standard].
   google,
+}
+
+/// What the map looks like.
+enum MapStyle {
+  /// Satellite photos with street names on top. The default.
+  satellite,
+
+  /// A light street map.
+  streets,
+
+  /// Hills and parks shaded in. Google Maps only.
+  terrain,
+
+  /// A dark street map, easy on the eyes at night.
+  dark,
 }
 
 /// Everything the user configures. Secrets (passwords) are not serialised
@@ -41,7 +57,8 @@ class AppSettings {
     this.recorderUsername = '',
     this.recorderPassword = '',
     this.trackingMode = TrackingMode.balanced,
-    this.mapProvider = MapProvider.standard,
+    this.mapProvider = MapProvider.google,
+    this.mapStyle = MapStyle.satellite,
     this.sharingLocation = true,
     this.setupComplete = false,
     this.keepAliveSeconds = 60,
@@ -79,6 +96,7 @@ class AppSettings {
   // --- Preferences ----------------------------------------------------------
   final TrackingMode trackingMode;
   final MapProvider mapProvider;
+  final MapStyle mapStyle;
   final bool sharingLocation;
   final bool setupComplete;
 
@@ -106,6 +124,7 @@ class AppSettings {
     String? recorderPassword,
     TrackingMode? trackingMode,
     MapProvider? mapProvider,
+    MapStyle? mapStyle,
     bool? sharingLocation,
     bool? setupComplete,
     int? keepAliveSeconds,
@@ -127,6 +146,7 @@ class AppSettings {
       recorderPassword: recorderPassword ?? this.recorderPassword,
       trackingMode: trackingMode ?? this.trackingMode,
       mapProvider: mapProvider ?? this.mapProvider,
+      mapStyle: mapStyle ?? this.mapStyle,
       sharingLocation: sharingLocation ?? this.sharingLocation,
       setupComplete: setupComplete ?? this.setupComplete,
       keepAliveSeconds: keepAliveSeconds ?? this.keepAliveSeconds,
@@ -150,6 +170,7 @@ class AppSettings {
     'recorderUsername': recorderUsername,
     'trackingMode': trackingMode.name,
     'mapProvider': mapProvider.name,
+    'mapStyle': mapStyle.name,
     'sharingLocation': sharingLocation,
     'setupComplete': setupComplete,
     'keepAliveSeconds': keepAliveSeconds,
@@ -182,7 +203,11 @@ class AppSettings {
       ),
       mapProvider: MapProvider.values.firstWhere(
         (m) => m.name == j['mapProvider'],
-        orElse: () => MapProvider.standard,
+        orElse: () => MapProvider.google,
+      ),
+      mapStyle: MapStyle.values.firstWhere(
+        (m) => m.name == j['mapStyle'],
+        orElse: () => MapStyle.satellite,
       ),
       sharingLocation: pick('sharingLocation', true),
       setupComplete: pick('setupComplete', false),
