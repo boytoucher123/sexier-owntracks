@@ -109,8 +109,8 @@ Then add these repository secrets (Settings → Secrets and variables → Action
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`flock`) and
 `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe; losing it means everyone
 has to uninstall and reinstall. Optionally add `GOOGLE_API_KEY` to enable Google
-Maps in release builds, and `CARTO_API_KEY` to use your own CARTO key for the
-standard map (without it, the free keyless CARTO tiles are used).
+Maps in release builds, and `CARTO_API_KEY` for the standard map. CARTO's free key
+(carto.com/basemaps/apikey) is required: without it every tile says "API KEY REQUIRED".
 
 ### Turning on Google Maps (optional)
 
