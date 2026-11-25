@@ -47,9 +47,9 @@ class AppSettings {
     this.port = kDefaultPort,
     this.useTls = true,
     this.useWebSocket = false,
-    this.username = kDefaultUsername,
+    this.username = '',
     this.password = '',
-    this.deviceName = '',
+    this.deviceName = kDeviceName,
     this.trackerId = '',
     this.displayName = '',
     this.baseTopic = 'owntracks',
@@ -102,6 +102,10 @@ class AppSettings {
 
   /// `owntracks/<login>/<device>`: where this phone publishes its location.
   String get ownTopic => '$baseTopic/$username/$deviceName';
+
+  /// A personal account made by the app (not the old shared login).
+  bool get hasAccount =>
+      username.isNotEmpty && password.isNotEmpty && username != kLegacyUsername;
 
   bool get hasRecorder => recorderUrl.trim().isNotEmpty;
 
@@ -188,9 +192,9 @@ class AppSettings {
       port: pick('port', kDefaultPort),
       useTls: pick('useTls', true),
       useWebSocket: pick('useWebSocket', false),
-      username: pick('username', kDefaultUsername),
+      username: pick('username', ''),
       password: password,
-      deviceName: pick('deviceName', ''),
+      deviceName: pick('deviceName', kDeviceName),
       trackerId: pick('trackerId', ''),
       displayName: pick('displayName', ''),
       baseTopic: pick('baseTopic', 'owntracks'),
@@ -220,19 +224,6 @@ class AppSettings {
   }
 
   String encode() => jsonEncode(toJson());
-}
-
-/// Turns "Fred Durk" into a topic-safe device name: `Fred`.
-/// Uses the first word so topics read naturally (owntracks/crew/Fred).
-String deviceNameFromDisplayName(String displayName) {
-  final first = displayName.trim().split(RegExp(r'\s+')).first;
-  return sanitizeTopicSegment(first);
-}
-
-/// MQTT topic levels can't contain `/`, `+` or `#`; we also drop anything
-/// that isn't a letter, digit, `-` or `_` to keep things predictable.
-String sanitizeTopicSegment(String input) {
-  return input.replaceAll(RegExp(r'[^A-Za-z0-9_\-]'), '');
 }
 
 /// "Fred Durk" -> "FD", "Fred" -> "FR", "" -> "".

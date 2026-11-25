@@ -144,8 +144,7 @@ void main() {
   });
 
   group('names', () {
-    test('Fred Durk -> device Fred, initials FD', () {
-      expect(deviceNameFromDisplayName('Fred Durk'), 'Fred');
+    test('Fred Durk -> initials FD', () {
       expect(trackerIdFromDisplayName('Fred Durk'), 'FD');
     });
 
@@ -153,13 +152,20 @@ void main() {
       expect(trackerIdFromDisplayName('fred'), 'FR');
       expect(trackerIdFromDisplayName('  Mary  Jane  Smith '), 'MS');
       expect(trackerIdFromDisplayName(''), '');
-      expect(deviceNameFromDisplayName("Zoë O'Neil"), 'Zo');
-      expect(sanitizeTopicSegment('a/b+c#d e'), 'abcde');
     });
 
-    test('own topic uses shared login and device name', () {
-      const s = AppSettings(username: 'family', deviceName: 'Fred');
-      expect(s.ownTopic, 'owntracks/family/Fred');
+    test('everyone publishes as owntracks/<their username>/phone', () {
+      const s = AppSettings(username: 'maya-chen', password: 'p');
+      expect(s.ownTopic, 'owntracks/maya-chen/phone');
+      expect(s.hasAccount, isTrue);
+    });
+
+    test('the old shared login, or no login, is not an account', () {
+      expect(
+        const AppSettings(username: 'class_of_2024', password: 'p').hasAccount,
+        isFalse,
+      );
+      expect(const AppSettings().hasAccount, isFalse);
     });
   });
 

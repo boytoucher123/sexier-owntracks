@@ -37,9 +37,7 @@ class LocationFix {
   LatLng get latLng => LatLng(lat, lon);
 }
 
-/// A person on the map. In this app's model each OwnTracks *device* is a
-/// person: everyone shares one login and puts their own name as the device,
-/// so `owntracks/crew/Fred` is Fred.
+/// A person on the map: one account, one phone (`owntracks/<username>/phone`).
 class Person {
   Person({
     required this.topic,
@@ -65,10 +63,15 @@ class Person {
   String? trackerId;
   LocationFix? last;
 
+  /// Their name on the server, shown until their card arrives.
+  String? accountName;
+
   String get name {
-    final n = cardName?.trim();
-    if (n != null && n.isNotEmpty) return n;
-    return device;
+    for (final n in [cardName, accountName]) {
+      final t = n?.trim();
+      if (t != null && t.isNotEmpty) return t;
+    }
+    return user;
   }
 
   String get initials {

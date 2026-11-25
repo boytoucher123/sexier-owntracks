@@ -1,0 +1,24 @@
+#!/bin/sh
+# Starts the whole OwnTracks stack and keeps it running. Called by Termux:Boot
+# (~/.termux/boot/owntracks-recorder on the Termux side). Runs forever: every
+# 30 s it starts anything that isn't running. Only one copy runs (flock).
+LOG=/var/log/owntracks-start.log
+exec 9>/run/owntracks-start.lock 2>/dev/null || exec 9>/tmp/owntracks-start.lock
+flock -n 9 || { echo "owntracks-start already running"; exit 0; }
+log() { echo "$(date '+%F %T') $*" >> $LOG; }
+trim() { # keep big logs small; copy back in place so open handles stay valid
+  [ -f "$1" ] && [ "$(stat -c %s "$1")" -gt 20000000 ] && tail -c 5000000 "$1" > "$1.tmp" && cat "$1.tmp" > "$1" && rm -f "$1.tmp"
+}
+log "supervisor starting (pid $$)"
+while true; do
+  pgrep -x sshd >/dev/null || { /usr/sbin/sshd -p 2222 && log "started sshd"; }
+  pgrep -x mosquitto >/dev/null || { mosquitto -c /etc/mosquitto/mosquitto.conf -d && log "started mosquitto"; sleep 2; }
+  pgrep -f '/usr/local/bin/duckdns-loop' >/dev/null || { nohup /usr/local/bin/duckdns-loop >/dev/null 2>&1 & log "started duckdns-loop"; }
+  pgrep -x ot-recorder >/dev/null || { nohup ot-recorder -S /var/spool/owntracks/recorder/store -A 8083 "owntracks/#" >>/var/log/ot-recorder.log 2>&1 & log "started ot-recorder"; }
+  pgrep -f '/usr/local/bin/flock-server' >/dev/null || { nohup /usr/local/bin/flock-server >>/var/log/flock-server.log 2>&1 & log "started flock-server"; }
+  pgrep -x caddy >/dev/null || { nohup caddy run --config /etc/caddy/Caddyfile >>/var/log/caddy/caddy.log 2>&1 & log "started caddy"; }
+  # history retention: hourly prune (OTR_KEEP_DAYS, default 4)
+  now=$(date +%s); if [ $((now - ${lastprune:-0})) -ge 3600 ]; then lastprune=$now; /usr/local/bin/owntracks-prune >>$LOG 2>&1; fi
+  for f in /var/log/mosquitto.log /var/log/ot-recorder.log /var/log/caddy/caddy.log /var/log/flock-server.log $LOG; do trim $f; done
+  sleep 30
+done

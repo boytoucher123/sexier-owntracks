@@ -64,8 +64,13 @@ class RecorderService {
         'Couldn\'t reach the history server. Check your connection.',
       );
     }
-    if (res.statusCode == 401 || res.statusCode == 403) {
+    if (res.statusCode == 401) {
       throw RecorderException('The history server rejected the login.');
+    }
+    if (res.statusCode == 403) {
+      throw RecorderException(
+        'You can only see history for people in your groups.',
+      );
     }
     if (res.statusCode == 404) {
       throw RecorderException(

@@ -1,0 +1,717 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""Flock accounts and groups, for the OwnTracks server.
+
+Runs on 127.0.0.1:8091 behind Caddy (:8443). Python standard library only.
+
+* Sign-up: POST /flock/api/signup {"name": "Maya Chen"} creates an MQTT
+  account (username from the name, random password) and returns the login
+  once. Nobody has to hand out passwords.
+* Groups: anyone can create one and becomes its leader. Others ask to join
+  with the group's invite code; the leader approves.
+* Who sees whom is enforced by mosquitto itself: this service writes the
+  ACL file from the groups and tells mosquitto to reload (SIGHUP, no
+  disconnects).
+* History: Caddy asks GET /check before passing a Recorder request on.
+  Only /api/0/locations for yourself or someone in one of your groups.
+
+Every account logs in with its MQTT username and password (HTTP Basic),
+checked against mosquitto's own password file.
+
+Command line (also installed as flock-admin):
+  flock-server [serve]          run the service
+  flock-server users            list accounts
+  flock-server groups           list groups, members and requests
+  flock-server add-user NAME    make an account by hand, prints the login
+  flock-server delete-user USER
+  flock-server rewrite-acl      regenerate the ACL file and reload mosquitto
+"""
+import base64
+import hashlib
+import hmac
+import json
+import os
+import re
+import secrets
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+import unicodedata
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PASSWD = os.environ.get("FLOCK_PASSWD", "/etc/mosquitto/passwd")
+ACL = os.environ.get("FLOCK_ACL", "/etc/mosquitto/acl")
+DB = os.environ.get("FLOCK_DB", "/var/lib/flock/flock.db")
+RELOAD = os.environ.get("FLOCK_RELOAD", "1") == "1"
+LISTEN = ("127.0.0.1", int(os.environ.get("FLOCK_PORT", "8091")))
+
+BASE = "owntracks"
+DEVICE = "phone"                    # one device per person, always "phone"
+SERVICE_USERS = {"recorder"}        # accounts that aren't people
+RESERVED = {"recorder", "admin", "root", "class_of_2024", "class-of-2024", "test"}
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I
+MAX_NAME = 40
+
+SIGNUPS_PER_IP_HOUR = 3
+SIGNUPS_PER_DAY = 30
+JOINS_PER_USER_HOUR = 20
+MAX_FAILS, FAIL_WINDOW, BLOCK = 10, 600, 900
+
+_lock = threading.RLock()
+
+
+class ApiError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+# ------------------------------------------------------------------ names --
+
+def username_base(name):
+    """'Zoë O'Brien' -> 'zoe-obrien'. Lowercase ASCII letters, digits, '-'."""
+    s = unicodedata.normalize("NFKD", name)
+    s = s.encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"['’`]", "", s)
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    s = s[:20].strip("-")
+    return s or "friend"
+
+
+def clean_name(name):
+    if not isinstance(name, str):
+        raise ApiError(400, "Please enter your name.")
+    name = " ".join(name.split())
+    if not name:
+        raise ApiError(400, "Please enter your name.")
+    if len(name) > MAX_NAME:
+        raise ApiError(400, f"Names can be up to {MAX_NAME} characters.")
+    return name
+
+
+def format_code(code):
+    return f"{code[:3]}-{code[3:]}"
+
+
+def normalize_code(code):
+    return re.sub(r"[^A-Z0-9]", "", str(code).upper())
+
+
+# --------------------------------------------------------------- password --
+
+def _read_passwd():
+    users = {}
+    try:
+        with open(PASSWD) as f:
+            for line in f:
+                line = line.strip()
+                if ":" in line:
+                    u, h = line.split(":", 1)
+                    users[u] = h
+    except FileNotFoundError:
+        pass
+    return users
+
+
+def _write_passwd(users):
+    tmp = PASSWD + ".flock-tmp"
+    with open(tmp, "w") as f:
+        for u, h in users.items():
+            f.write(f"{u}:{h}\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, PASSWD)
+
+
+def hash_password(pw, iterations=101):
+    """mosquitto's $7$ format: PBKDF2-HMAC-SHA512, 12-byte salt, 64-byte hash."""
+    salt = os.urandom(12)
+    h = hashlib.pbkdf2_hmac("sha512", pw.encode(), salt, iterations, 64)
+    return f"$7${iterations}${base64.b64encode(salt).decode()}${base64.b64encode(h).decode()}"
+
+
+def check_hash(pw, stored):
+    p = stored.split("$")
+    if len(p) != 5 or p[1] != "7":
+        return False
+    it, salt, want = int(p[2]), base64.b64decode(p[3]), base64.b64decode(p[4])
+    got = hashlib.pbkdf2_hmac("sha512", pw.encode(), salt, it, len(want))
+    return hmac.compare_digest(got, want)
+
+
+_ok_cache = {}      # sha256(user, pw, stored hash) -> expiry
+_fails = {}         # ip -> [timestamps]
+_blocked = {}       # ip -> until
+
+
+def authenticate(header, ip):
+    """Returns the username for a valid Basic login, else raises 401/429."""
+    now = time.time()
+    with _lock:
+        if _blocked.get(ip, 0) > now:
+            raise ApiError(429, "Too many wrong passwords. Try again later.")
+    user = pw = None
+    if header and header.startswith("Basic "):
+        try:
+            user, pw = base64.b64decode(header[6:]).decode().split(":", 1)
+        except Exception:
+            user = None
+    if user is None:
+        raise ApiError(401, "Please sign in.")
+    stored = _read_passwd().get(user)
+    if stored and user not in SERVICE_USERS:
+        key = hashlib.sha256(f"{user}\0{pw}\0{stored}".encode()).hexdigest()
+        if _ok_cache.get(key, 0) > now or check_hash(pw, stored):
+            _ok_cache[key] = now + 300
+            return user
+    with _lock:
+        f = [t for t in _fails.get(ip, []) if t > now - FAIL_WINDOW] + [now]
+        _fails[ip] = f
+        if len(f) >= MAX_FAILS:
+            _blocked[ip] = now + BLOCK
+            _fails.pop(ip, None)
+    time.sleep(0.5)
+    raise ApiError(401, "Your login wasn't accepted.")
+
+
+# --------------------------------------------------------------- database --
+
+_conn = None
+
+
+def db():
+    """The one shared connection. Every caller holds _lock while using it."""
+    global _conn
+    if _conn is not None:
+        return _conn
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    c = sqlite3.connect(DB, timeout=10, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys = ON")
+    c.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+          username TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS groups (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+          leader TEXT NOT NULL REFERENCES users(username),
+          code TEXT NOT NULL UNIQUE, created INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS members (
+          group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+          username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'member')),
+          since INTEGER NOT NULL,
+          PRIMARY KEY (group_id, username));
+        """
+    )
+    _conn = c
+    return c
+
+
+def _new_code(c):
+    while True:
+        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
+        if not c.execute("SELECT 1 FROM groups WHERE code=?", (code,)).fetchone():
+            return code
+
+
+def _visible(c, me):
+    """Usernames I share a group with (approved members only), not me."""
+    rows = c.execute(
+        """SELECT DISTINCT o.username FROM members m
+           JOIN members o ON o.group_id = m.group_id AND o.status = 'member'
+           WHERE m.username = ? AND m.status = 'member' AND o.username != ?""",
+        (me, me),
+    )
+    return sorted(r[0] for r in rows)
+
+
+def _group(c, gid):
+    g = c.execute("SELECT * FROM groups WHERE id=?", (gid,)).fetchone()
+    if not g:
+        raise ApiError(404, "That group doesn't exist any more.")
+    return g
+
+
+def _require_leader(c, gid, me):
+    g = _group(c, gid)
+    if g["leader"] != me:
+        raise ApiError(403, "Only the group leader can do that.")
+    return g
+
+
+def _leave(c, gid, user):
+    """Removes user from a group. A leaving leader hands over to the longest
+    standing member; the last member leaving deletes the group."""
+    g = _group(c, gid)
+    c.execute("DELETE FROM members WHERE group_id=? AND username=?", (gid, user))
+    if g["leader"] == user:
+        nxt = c.execute(
+            "SELECT username FROM members WHERE group_id=? AND status='member' "
+            "ORDER BY since, username LIMIT 1",
+            (gid,),
+        ).fetchone()
+        if nxt:
+            c.execute("UPDATE groups SET leader=? WHERE id=?", (nxt[0], gid))
+        else:
+            c.execute("DELETE FROM groups WHERE id=?", (gid,))
+
+
+# -------------------------------------------------------------------- ACL --
+
+def acl_text(c):
+    out = [
+        "# Written by flock-server from its groups database. Do not edit by hand:",
+        "# changes are overwritten. Run `flock-admin rewrite-acl` to regenerate.",
+        "",
+        "user recorder",
+        f"topic read {BASE}/#",
+    ]
+    for (u,) in c.execute("SELECT username FROM users ORDER BY username"):
+        out += ["", f"user {u}", f"topic readwrite {BASE}/{u}/#"]
+        for o in _visible(c, u):
+            out += [f"topic read {BASE}/{o}/#", f"topic write {BASE}/{o}/{DEVICE}/cmd"]
+        # Leaders see who is asking to join: their name and photo card.
+        for (p,) in c.execute(
+            """SELECT m.username FROM members m JOIN groups g ON g.id = m.group_id
+               WHERE g.leader = ? AND m.status = 'pending' ORDER BY m.username""",
+            (u,),
+        ):
+            out.append(f"topic read {BASE}/{p}/{DEVICE}/info")
+    return "\n".join(out) + "\n"
+
+
+def write_acl(c):
+    tmp = ACL + ".flock-tmp"
+    with open(tmp, "w") as f:
+        f.write(acl_text(c))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, ACL)
+    reload_broker()
+
+
+def reload_broker():
+    if RELOAD:
+        subprocess.run(["pkill", "-HUP", "-x", "mosquitto"], check=False)
+
+
+# ----------------------------------------------------------------- actions --
+
+_signups = []           # timestamps
+_signups_ip = {}        # ip -> [timestamps]
+_joins = {}             # user -> [timestamps]
+
+
+def create_user(name, ip=None):
+    name = clean_name(name)
+    now = time.time()
+    with _lock:
+        if ip is not None:
+            day = [t for t in _signups if t > now - 86400]
+            mine = [t for t in _signups_ip.get(ip, []) if t > now - 3600]
+            if len(day) >= SIGNUPS_PER_DAY or len(mine) >= SIGNUPS_PER_IP_HOUR:
+                raise ApiError(429, "Too many new accounts right now. Try again later.")
+            _signups[:] = day + [now]
+            _signups_ip[ip] = mine + [now]
+        c = db()
+        with c:
+            taken = set(_read_passwd()) | {r[0] for r in c.execute("SELECT username FROM users")}
+            base = username_base(name)
+            username, n = base, 2
+            while username in taken or username in RESERVED:
+                username = f"{base}-{n}"
+                n += 1
+            password = secrets.token_urlsafe(18)   # 24 characters
+            c.execute(
+                "INSERT INTO users (username, name, created) VALUES (?, ?, ?)",
+                (username, name, int(now)),
+            )
+            users = _read_passwd()
+            users[username] = hash_password(password)
+            _write_passwd(users)
+            write_acl(c)
+        return {"username": username, "password": password, "name": name}
+
+
+def delete_user(username):
+    with _lock:
+        c = db()
+        with c:
+            for (gid,) in c.execute(
+                "SELECT group_id FROM members WHERE username=?", (username,)
+            ).fetchall():
+                _leave(c, gid, username)
+            c.execute("DELETE FROM users WHERE username=?", (username,))
+            users = _read_passwd()
+            if users.pop(username, None) is not None:
+                _write_passwd(users)
+            write_acl(c)
+
+
+def me(user):
+    with _lock:
+        c = db()
+        u = c.execute("SELECT * FROM users WHERE username=?", (user,)).fetchone()
+        if not u:
+            raise ApiError(404, "This account isn't set up for groups.")
+        groups, pending = [], []
+        for g in c.execute(
+            """SELECT g.*, m.status FROM groups g JOIN members m ON m.group_id = g.id
+               WHERE m.username = ? ORDER BY g.created""",
+            (user,),
+        ).fetchall():
+            if g["status"] == "pending":
+                leader = c.execute(
+                    "SELECT name FROM users WHERE username=?", (g["leader"],)
+                ).fetchone()
+                pending.append({
+                    "id": g["id"], "name": g["name"],
+                    "leader_name": leader[0] if leader else g["leader"],
+                })
+                continue
+            is_leader = g["leader"] == user
+            members = [
+                {"username": r["username"], "name": r["name"],
+                 "leader": r["username"] == g["leader"], "since": r["since"]}
+                for r in c.execute(
+                    """SELECT u.username, u.name, m.since FROM members m
+                       JOIN users u ON u.username = m.username
+                       WHERE m.group_id = ? AND m.status = 'member'
+                       ORDER BY (u.username != ?), u.name COLLATE NOCASE""",
+                    (g["id"], g["leader"]),
+                )
+            ]
+            item = {"id": g["id"], "name": g["name"], "leader": g["leader"],
+                    "role": "leader" if is_leader else "member", "members": members}
+            if is_leader:
+                item["code"] = format_code(g["code"])
+                item["requests"] = [
+                    {"username": r["username"], "name": r["name"],
+                     "created": r["created"], "requested": r["since"]}
+                    for r in c.execute(
+                        """SELECT u.username, u.name, u.created, m.since FROM members m
+                           JOIN users u ON u.username = m.username
+                           WHERE m.group_id = ? AND m.status = 'pending'
+                           ORDER BY m.since""",
+                        (g["id"],),
+                    )
+                ]
+            groups.append(item)
+        names = {
+            r[0]: r[1]
+            for r in c.execute("SELECT username, name FROM users")
+        }
+        visible = _visible(c, user)
+        return {
+            "username": u["username"], "name": u["name"], "created": u["created"],
+            "device": DEVICE, "groups": groups, "pending": pending,
+            "visible": [{"username": v, "name": names.get(v, v)} for v in visible],
+        }
+
+
+def rename(user, name):
+    name = clean_name(name)
+    with _lock:
+        c = db()
+        with c:
+            c.execute("UPDATE users SET name=? WHERE username=?", (name, user))
+    return me(user)
+
+
+def create_group(user, name):
+    name = " ".join(str(name or "").split())
+    if not name:
+        raise ApiError(400, "Give the group a name.")
+    if len(name) > MAX_NAME:
+        raise ApiError(400, f"Group names can be up to {MAX_NAME} characters.")
+    with _lock:
+        c = db()
+        with c:
+            now = int(time.time())
+            cur = c.execute(
+                "INSERT INTO groups (name, leader, code, created) VALUES (?, ?, ?, ?)",
+                (name, user, _new_code(c), now),
+            )
+            c.execute(
+                "INSERT INTO members (group_id, username, status, since) VALUES (?, ?, 'member', ?)",
+                (cur.lastrowid, user, now),
+            )
+            write_acl(c)
+    return me(user)
+
+
+def join(user, code):
+    code = normalize_code(code)
+    now = time.time()
+    with _lock:
+        recent = [t for t in _joins.get(user, []) if t > now - 3600]
+        if len(recent) >= JOINS_PER_USER_HOUR:
+            raise ApiError(429, "Too many tries. Try again in an hour.")
+        _joins[user] = recent + [now]
+        c = db()
+        g = c.execute("SELECT * FROM groups WHERE code=?", (code,)).fetchone()
+        if not g:
+            raise ApiError(404, "No group has that code. Check it and try again.")
+        with c:
+            have = c.execute(
+                "SELECT status FROM members WHERE group_id=? AND username=?",
+                (g["id"], user),
+            ).fetchone()
+            if not have:
+                c.execute(
+                    "INSERT INTO members (group_id, username, status, since) VALUES (?, ?, 'pending', ?)",
+                    (g["id"], user, int(now)),
+                )
+                write_acl(c)
+    return me(user)
+
+
+def decide(user, gid, other, approve):
+    with _lock:
+        c = db()
+        _require_leader(c, gid, user)
+        with c:
+            row = c.execute(
+                "SELECT status FROM members WHERE group_id=? AND username=?", (gid, other)
+            ).fetchone()
+            if not row or row[0] != "pending":
+                raise ApiError(404, "That request isn't waiting any more.")
+            if approve:
+                c.execute(
+                    "UPDATE members SET status='member', since=? WHERE group_id=? AND username=?",
+                    (int(time.time()), gid, other),
+                )
+            else:
+                c.execute("DELETE FROM members WHERE group_id=? AND username=?", (gid, other))
+            write_acl(c)
+    return me(user)
+
+
+def remove_member(user, gid, other):
+    with _lock:
+        c = db()
+        g = _group(c, gid)
+        if other != user and g["leader"] != user:
+            raise ApiError(403, "Only the group leader can remove people.")
+        with c:
+            _leave(c, gid, other)
+            write_acl(c)
+    return me(user)
+
+
+def new_code(user, gid):
+    with _lock:
+        c = db()
+        _require_leader(c, gid, user)
+        with c:
+            c.execute("UPDATE groups SET code=? WHERE id=?", (_new_code(c), gid))
+    return me(user)
+
+
+def rename_group(user, gid, name):
+    name = " ".join(str(name or "").split())
+    if not name or len(name) > MAX_NAME:
+        raise ApiError(400, "Give the group a name (up to 40 characters).")
+    with _lock:
+        c = db()
+        _require_leader(c, gid, user)
+        with c:
+            c.execute("UPDATE groups SET name=? WHERE id=?", (name, gid))
+    return me(user)
+
+
+def make_leader(user, gid, other):
+    with _lock:
+        c = db()
+        _require_leader(c, gid, user)
+        row = c.execute(
+            "SELECT status FROM members WHERE group_id=? AND username=?", (gid, other)
+        ).fetchone()
+        if not row or row[0] != "member":
+            raise ApiError(400, "Only a member can become the leader.")
+        with c:
+            c.execute("UPDATE groups SET leader=? WHERE id=?", (other, gid))
+            write_acl(c)
+    return me(user)
+
+
+def history_allowed(user, uri, method):
+    """Recorder access: only reading locations of yourself or your groups."""
+    if method != "GET":
+        return False
+    u = urllib.parse.urlsplit(uri)
+    if u.path in ("/api/0/version",):
+        return True
+    if u.path != "/api/0/locations":
+        return False
+    q = urllib.parse.parse_qs(u.query)
+    who = q.get("user", [""])
+    if len(who) != 1:
+        return False
+    if who[0] == user:
+        return True
+    with _lock:
+        return who[0] in _visible(db(), user)
+
+
+# ------------------------------------------------------------------- HTTP --
+
+ROUTES = [
+    ("POST", r"/flock/api/signup", "signup"),
+    ("GET", r"/flock/api/me", "me"),
+    ("PATCH", r"/flock/api/me", "rename"),
+    ("DELETE", r"/flock/api/me", "delete_me"),
+    ("POST", r"/flock/api/groups", "create_group"),
+    ("POST", r"/flock/api/join", "join"),
+    ("PATCH", r"/flock/api/groups/(\d+)", "rename_group"),
+    ("POST", r"/flock/api/groups/(\d+)/code", "new_code"),
+    ("POST", r"/flock/api/groups/(\d+)/leader", "make_leader"),
+    ("POST", r"/flock/api/groups/(\d+)/requests/([a-z0-9-]+)/(approve|deny)", "decide"),
+    ("DELETE", r"/flock/api/groups/(\d+)/members/([a-z0-9-]+)", "remove_member"),
+]
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "flock"
+    sys_version = ""
+
+    def log_message(self, *a):
+        pass
+
+    def _ip(self):
+        return self.headers.get("X-Forwarded-For", self.client_address[0]).split(",")[0].strip()
+
+    def _send(self, status, body=None, extra=None):
+        data = b"" if body is None else json.dumps(body).encode()
+        self.send_response(status)
+        if body is not None:
+            self.send_header("Content-Type", "application/json")
+        if status == 401:
+            self.send_header("WWW-Authenticate", 'Basic realm="Flock"')
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 4096:
+            raise ApiError(413, "Too much data.")
+        if n == 0:
+            return {}
+        try:
+            v = json.loads(self.rfile.read(n))
+        except ValueError:
+            raise ApiError(400, "That wasn't valid JSON.")
+        if not isinstance(v, dict):
+            raise ApiError(400, "Expected a JSON object.")
+        return v
+
+    def _handle(self, method):
+        try:
+            path = urllib.parse.urlsplit(self.path).path.rstrip("/")
+            if path == "/check":
+                user = authenticate(self.headers.get("Authorization"), self._ip())
+                ok = history_allowed(
+                    user,
+                    self.headers.get("X-Forwarded-Uri", ""),
+                    self.headers.get("X-Forwarded-Method", "GET"),
+                )
+                return self._send(200 if ok else 403)
+            for m, pattern, name in ROUTES:
+                match = re.fullmatch(pattern, path)
+                if match and m == method:
+                    return self._route(name, match.groups())
+            raise ApiError(404, "Not found.")
+        except ApiError as e:
+            self._send(e.status, {"error": e.message})
+        except Exception as e:  # never leak details
+            print(time.strftime("%F %T"), "error:", repr(e), file=sys.stderr, flush=True)
+            self._send(500, {"error": "The server had a problem. Try again."})
+
+    def _route(self, name, args):
+        if name == "signup":
+            body = self._body()
+            return self._send(201, create_user(body.get("name"), ip=self._ip()))
+        user = authenticate(self.headers.get("Authorization"), self._ip())
+        if name == "me":
+            return self._send(200, me(user))
+        body = self._body() if self.command in ("POST", "PATCH") else {}
+        if name == "rename":
+            return self._send(200, rename(user, body.get("name")))
+        if name == "delete_me":
+            delete_user(user)
+            return self._send(204)
+        if name == "create_group":
+            return self._send(201, create_group(user, body.get("name")))
+        if name == "join":
+            return self._send(200, join(user, body.get("code", "")))
+        gid = int(args[0])
+        if name == "rename_group":
+            return self._send(200, rename_group(user, gid, body.get("name")))
+        if name == "new_code":
+            return self._send(200, new_code(user, gid))
+        if name == "make_leader":
+            return self._send(200, make_leader(user, gid, str(body.get("username", ""))))
+        if name == "decide":
+            return self._send(200, decide(user, gid, args[1], args[2] == "approve"))
+        if name == "remove_member":
+            return self._send(200, remove_member(user, gid, args[1]))
+        raise ApiError(404, "Not found.")
+
+    def do_GET(self):
+        self._handle("GET")
+
+    def do_POST(self):
+        self._handle("POST")
+
+    def do_PATCH(self):
+        self._handle("PATCH")
+
+    def do_DELETE(self):
+        self._handle("DELETE")
+
+
+def serve():
+    with _lock:
+        write_acl(db())
+    print(time.strftime("%F %T"), f"flock-server listening on {LISTEN[0]}:{LISTEN[1]}", flush=True)
+    ThreadingHTTPServer(LISTEN, Handler).serve_forever()
+
+
+def cli(argv):
+    cmd = argv[0] if argv else "serve"
+    if cmd == "serve":
+        return serve()
+    c = db()
+    if cmd == "users":
+        for r in c.execute("SELECT * FROM users ORDER BY created"):
+            print(f"{r['username']:22} {r['name']:30} {time.strftime('%F', time.localtime(r['created']))}")
+    elif cmd == "groups":
+        for g in c.execute("SELECT * FROM groups ORDER BY id"):
+            print(f"#{g['id']} {g['name']}  leader={g['leader']}  code={format_code(g['code'])}")
+            for m in c.execute(
+                "SELECT username, status FROM members WHERE group_id=? ORDER BY status, username",
+                (g["id"],),
+            ):
+                print(f"    {m['username']:22} {m['status']}")
+    elif cmd == "add-user" and len(argv) == 2:
+        r = create_user(argv[1])
+        print(f"username: {r['username']}\npassword: {r['password']}")
+    elif cmd == "delete-user" and len(argv) == 2:
+        delete_user(argv[1])
+        print("deleted", argv[1])
+    elif cmd == "rewrite-acl":
+        write_acl(c)
+        print("ACL written to", ACL)
+    else:
+        print(__doc__)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(cli(sys.argv[1:]) or 0)

@@ -231,17 +231,21 @@ void main() {
   // Against the real server, verifying its certificate with the bundled CA
   // (no "allow self-signed"). Run on the server itself, where `localhost` is
   // in the certificate:
-  //   FLOCK_REAL_PASSWORD=... flutter test test/mqtt_integration_test.dart
+  //   FLOCK_REAL_USER=... FLOCK_REAL_PASSWORD=... \
+  //     flutter test test/mqtt_integration_test.dart
+  // (make a throwaway account with `flock-admin add-user "Flock Test"`).
   group('real server with bundled CA', () {
+    final user = Platform.environment['FLOCK_REAL_USER'];
     final pass = Platform.environment['FLOCK_REAL_PASSWORD'];
-    final realSkip = pass == null ? 'set FLOCK_REAL_PASSWORD to run' : null;
+    final realSkip = pass == null || user == null
+        ? 'set FLOCK_REAL_USER and FLOCK_REAL_PASSWORD to run'
+        : null;
     final host = Platform.environment['FLOCK_REAL_HOST'] ?? 'localhost';
     AppSettings real() => AppSettings(
       host: host,
-      username: Platform.environment['FLOCK_REAL_USER'] ?? kDefaultUsername,
+      username: user ?? '',
       recorderUrl: 'https://$host:8443',
       password: pass ?? '',
-      deviceName: 'FlockTest',
       trackerId: 'FT',
       setupComplete: true,
     );
@@ -281,8 +285,8 @@ void main() {
     test('history: fetches with the shared login over verified TLS', () async {
       final fixes = await RecorderService().history(
         real(),
-        user: 'class-of-2024',
-        device: 'george',
+        user: real().username,
+        device: kDeviceName,
         from: DateTime.now().subtract(const Duration(days: 1)),
       );
       expect(fixes, isA<List<Object>>());
@@ -292,8 +296,8 @@ void main() {
       await expectLater(
         RecorderService().history(
           real().copyWith(password: 'wrong'),
-          user: 'class-of-2024',
-          device: 'george',
+          user: real().username,
+          device: kDeviceName,
           from: DateTime.now().subtract(const Duration(hours: 1)),
         ),
         throwsA(

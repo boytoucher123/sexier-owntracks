@@ -13,6 +13,7 @@ import '../theme.dart';
 import '../util/format.dart';
 import '../widgets/avatar.dart';
 import '../widgets/family_map.dart';
+import 'groups_screen.dart';
 import 'history_screen.dart';
 import 'settings_screen.dart';
 
@@ -56,7 +57,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) context.read<AppState>().onResume();
+    final app = context.read<AppState>();
+    if (state == AppLifecycleState.resumed) app.onResume();
+    if (state == AppLifecycleState.paused) app.onPause();
   }
 
   @override
@@ -420,6 +423,8 @@ class _PeopleList extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final me = people.where(app.isMe).firstOrNull;
+    final account = app.account;
+    final waiting = account?.waitingRequests ?? 0;
     return ListView(
       controller: scroll,
       padding: EdgeInsets.only(
@@ -452,6 +457,16 @@ class _PeopleList extends StatelessWidget {
                     ),
                   ),
                 ),
+              const Spacer(),
+              Badge(
+                isLabelVisible: waiting > 0,
+                label: Text('$waiting'),
+                child: TextButton.icon(
+                  onPressed: () => _openGroups(context),
+                  icon: const Icon(Icons.groups_rounded),
+                  label: const Text('Groups'),
+                ),
+              ),
             ],
           ),
         ),
@@ -460,6 +475,23 @@ class _PeopleList extends StatelessWidget {
             icon: Icons.location_off_rounded,
             text: 'You\'re not sharing your location. Turn it on in Settings.',
           ),
+        if (account != null)
+          for (final g in account.groups)
+            if (g.isLeader && g.requests.isNotEmpty)
+              _Banner(
+                icon: Icons.person_add_alt_1_rounded,
+                text: g.requests.length == 1
+                    ? '${g.requests.first.name} wants to join ${g.name}.'
+                    : '${g.requests.length} people want to join ${g.name}.',
+                onTap: () => _openGroups(context),
+              ),
+        if (account != null)
+          for (final p in account.pending)
+            _Banner(
+              icon: Icons.hourglass_top_rounded,
+              text: 'Waiting for ${p.leaderName} to let you into ${p.name}.',
+              onTap: () => _openGroups(context),
+            ),
         for (final p in people)
           _PersonRow(
             person: p,
@@ -468,14 +500,23 @@ class _PeopleList extends StatelessWidget {
             me: me,
           ),
         if (people.isEmpty || (people.length == 1 && me != null))
-          const _EmptyPeople(),
+          _EmptyPeople(
+            inGroup: account == null || account.groups.isNotEmpty,
+            onGroups: () => _openGroups(context),
+          ),
       ],
     );
   }
 }
 
+void _openGroups(BuildContext context) =>
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const GroupsScreen()));
+
 class _EmptyPeople extends StatelessWidget {
-  const _EmptyPeople();
+  const _EmptyPeople({required this.inGroup, required this.onGroups});
+  final bool inGroup;
+  final VoidCallback onGroups;
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -483,19 +524,27 @@ class _EmptyPeople extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
       child: Card(
         color: cs.primary.withOpacity(0.08),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Icon(Icons.person_add_alt_1_rounded, color: cs.primary),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'Waiting for others. Ask your friends to install the app and sign in '
-                  'with the same login, using their own name.',
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onGroups,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Icon(Icons.person_add_alt_1_rounded, color: cs.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    inGroup
+                        ? 'No one else here yet. Share your group\'s code from '
+                              'Groups so your friends can ask to join.'
+                        : 'You\'re not in a group yet. Start one, or enter a '
+                              'code someone sent you, in Groups.',
+                  ),
                 ),
-              ),
-            ],
+                Icon(Icons.chevron_right_rounded, color: cs.primary),
+              ],
+            ),
           ),
         ),
       ),
@@ -504,23 +553,29 @@ class _EmptyPeople extends StatelessWidget {
 }
 
 class _Banner extends StatelessWidget {
-  const _Banner({required this.icon, required this.text});
+  const _Banner({required this.icon, required this.text, this.onTap});
   final IconData icon;
   final String text;
+  final VoidCallback? onTap;
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
       child: Card(
         color: FlockColors.warning.withOpacity(0.15),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Icon(icon, color: FlockColors.warning),
-              const SizedBox(width: 12),
-              Expanded(child: Text(text)),
-            ],
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                Icon(icon, color: FlockColors.warning),
+                const SizedBox(width: 12),
+                Expanded(child: Text(text)),
+                if (onTap != null) const Icon(Icons.chevron_right_rounded),
+              ],
+            ),
           ),
         ),
       ),

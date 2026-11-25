@@ -11,13 +11,22 @@ import 'dart:io';
 
 const String kDefaultHost = 'owntracks-class-of-2024.duckdns.org';
 const int kDefaultPort = 8883;
-const String kDefaultUsername = 'class_of_2024';
+
+/// The old shared login. Phones still using it are asked to make their own
+/// account; the server no longer accepts it.
+const String kLegacyUsername = 'class_of_2024';
+
+/// Everyone has one device, always called this: `owntracks/<username>/phone`.
+const String kDeviceName = 'phone';
 
 /// Location history (OwnTracks Recorder) behind an HTTPS proxy on the same
 /// server. It accepts the same username and password as MQTT, so nobody has
 /// to enter anything extra. Not secret: it is useless without the login.
 const String kDefaultRecorderUrl =
     'https://owntracks-class-of-2024.duckdns.org:8443';
+
+/// Accounts and groups: sign-up, invite codes, approvals.
+const String kAccountApiUrl = '$kDefaultRecorderUrl/flock/api';
 
 /// The server keeps about this many days of history; the app offers this many.
 const int kHistoryDays = 3;

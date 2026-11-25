@@ -14,6 +14,7 @@ import 'package:flock/main.dart';
 import 'package:flock/models/person.dart';
 import 'package:flock/models/settings.dart';
 import 'package:flock/screens/photo_crop_screen.dart';
+import 'package:flock/services/account_service.dart';
 import 'package:flock/services/location_service.dart';
 import 'package:flock/services/mqtt_service.dart';
 import 'package:flock/services/owntracks_protocol.dart';
@@ -95,8 +96,89 @@ class _Recorder extends RecorderService {
   }) async => fixes;
 }
 
+/// The server's account service, in memory: Fred leads "The Crew", and Zoë
+/// has asked to join.
+class _Accounts extends AccountService {
+  bool hasGroup = true;
+  bool zoeAsking = true;
+
+  Map<String, dynamic> _me() => {
+    'username': 'fred-durk',
+    'name': 'Fred Durk',
+    'created': 1790000000,
+    'groups': [
+      if (hasGroup)
+        {
+          'id': 1,
+          'name': 'The Crew',
+          'leader': 'fred-durk',
+          'role': 'leader',
+          'code': 'K7Q-2MX',
+          'members': [
+            for (final (u, n) in _crewMembers)
+              {'username': u, 'name': n, 'leader': u == 'fred-durk'},
+          ],
+          'requests': [
+            if (zoeAsking)
+              {
+                'username': 'zoe-obrien',
+                'name': "Zoë O'Brien",
+                'created':
+                    DateTime.now()
+                        .subtract(const Duration(hours: 2))
+                        .millisecondsSinceEpoch ~/
+                    1000,
+                'requested': 0,
+              },
+          ],
+        },
+    ],
+    'pending': <Object>[],
+    'visible': [
+      if (hasGroup)
+        for (final (u, n) in _crewMembers)
+          if (u != 'fred-durk') {'username': u, 'name': n},
+    ],
+  };
+
+  @override
+  Future<NewAccount> signUp(String name) async {
+    hasGroup = false;
+    return NewAccount(username: 'fred-durk', password: 'x' * 24, name: name);
+  }
+
+  @override
+  Future<Account> me(AppSettings s) async => Account.fromJson(_me());
+
+  @override
+  Future<Account> createGroup(AppSettings s, String name) async {
+    hasGroup = true;
+    zoeAsking = false;
+    return Account.fromJson(_me());
+  }
+
+  @override
+  Future<Account> approve(AppSettings s, int group, String user) async {
+    zoeAsking = false;
+    return Account.fromJson(_me());
+  }
+}
+
+const _crewMembers = [
+  ('fred-durk', 'Fred Durk'),
+  ('jack-lee', 'Jack Lee'),
+  ('maya-chen', 'Maya Chen'),
+  ('sophie-nguyen', 'Sophie Nguyen'),
+];
+
 class _State extends AppState {
-  _State({super.store, super.mqtt, super.location, super.recorder});
+  _State({
+    super.store,
+    super.mqtt,
+    super.location,
+    super.recorder,
+    super.accounts,
+  });
   @override
   Future<ConnectionTestResult> testConnection(AppSettings c) async =>
       const ConnectionTestResult.ok();
@@ -322,6 +404,7 @@ Future<(_State, _Mqtt)> _boot(
     mqtt: mqtt,
     location: _Location(access),
     recorder: _Recorder(_maryDay()),
+    accounts: _Accounts(),
   );
   await t.runAsync(state.init);
   await t.pumpWidget(
@@ -336,9 +419,8 @@ Future<(_State, _Mqtt)> _boot(
 
 const _crew = AppSettings(
   host: 'tracking.thecrew.net',
-  username: 'crew',
+  username: 'fred-durk',
   password: 'x',
-  deviceName: 'Fred',
   displayName: 'Fred Durk',
   trackerId: 'FD',
   recorderUrl: 'https://tracking.thecrew.net/owntracks',
@@ -346,25 +428,30 @@ const _crew = AppSettings(
 );
 
 void _populate(_Mqtt m) {
-  const b = 'owntracks/crew';
-  m.inject('$b/Fred', _loc(_fred.$1, _fred.$2, 1, 'FD', batt: 72));
-  m.inject('$b/Maya', _loc(_mary.$1, _mary.$2, 4, 'MC', batt: 54));
+  const b = 'owntracks';
+  m.inject('$b/fred-durk/phone', _loc(_fred.$1, _fred.$2, 1, 'FD', batt: 72));
+  m.inject('$b/maya-chen/phone', _loc(_mary.$1, _mary.$2, 4, 'MC', batt: 54));
   m.inject(
-    '$b/Maya/info',
+    '$b/maya-chen/phone/info',
     OwnTracksProtocol.encodeCard(name: 'Maya Chen', trackerId: 'MC'),
   );
-  m.inject('$b/Jack', _loc(_jack.$1, _jack.$2, 12, 'JL', batt: 23));
+  m.inject('$b/jack-lee/phone', _loc(_jack.$1, _jack.$2, 12, 'JL', batt: 23));
   m.inject(
-    '$b/Jack/info',
+    '$b/jack-lee/phone/info',
     OwnTracksProtocol.encodeCard(name: 'Jack Lee', trackerId: 'JL'),
   );
   m.inject(
-    '$b/Sophie',
+    '$b/sophie-nguyen/phone',
     _loc(_sophie.$1, _sophie.$2, 2, 'SN', batt: 91, charging: true, speed: 11),
   );
   m.inject(
-    '$b/Sophie/info',
+    '$b/sophie-nguyen/phone/info',
     OwnTracksProtocol.encodeCard(name: 'Sophie Nguyen', trackerId: 'SN'),
+  );
+  // Asking to join: the leader sees the card, but she's not on the map.
+  m.inject(
+    '$b/zoe-obrien/phone/info',
+    OwnTracksProtocol.encodeCard(name: "Zoë O'Brien", trackerId: 'ZO'),
   );
 }
 
@@ -390,27 +477,23 @@ void main() {
 
     await t.tap(find.text('Get started'));
     await _settle(t);
-    await t.enterText(
-      find.widgetWithText(TextField, 'Server address'),
-      'tracking.thecrew.net',
-    );
-    await t.enterText(find.widgetWithText(TextField, 'Username'), 'crew');
-    await t.enterText(
-      find.widgetWithText(TextField, 'Password'),
-      'hunter2hunter2',
-    );
-    await t.tap(find.text('Test connection'));
-    await _shot(t, '02-connect');
-
-    await t.tap(find.text('Continue'));
-    await _settle(t);
     await t.enterText(find.widgetWithText(TextField, 'Your name'), 'Fred Durk');
     FocusManager.instance.primaryFocus?.unfocus();
-    await _shot(t, '03-you');
+    await _shot(t, '02-you');
 
-    await t.tap(find.text('Continue'));
+    await t.tap(find.text('Create my account'));
     await _settle(t);
-    // History is pre-filled for this server, so the button says Continue.
+    await _settle(
+      t,
+    ); // let the page finish sliding in; it ignores taps until then
+    await _shot(t, '03-group');
+
+    await t.enterText(find.widgetWithText(TextField, 'Group name'), 'The Crew');
+    await _settle(t); // the list scrolls the field into view; taps wait for it
+    await t.tap(find.text('Start'));
+    await _settle(t);
+    await _shot(t, '04-group-code');
+
     await t.tap(find.text('Continue'));
     await _shot(t, '04-location');
   }, skip: skip != null);
@@ -439,6 +522,7 @@ void main() {
     await _shot(t, '13-history-joystick');
     await g.up();
     expect(state.people.length, 4);
+    expect(state.people.any((p) => p.user == 'zoe-obrien'), isFalse);
   }, skip: skip != null);
 
   testWidgets('sheet lowered', (t) async {
@@ -480,6 +564,14 @@ void main() {
     final (_, mqtt) = await _boot(t, settings: _crew, mode: ThemeMode.dark);
     _populate(mqtt);
     await _shot(t, '08-home-dark');
+  }, skip: skip != null);
+
+  testWidgets('groups', (t) async {
+    final (_, mqtt) = await _boot(t, settings: _crew);
+    _populate(mqtt);
+    await _settle(t);
+    await t.tap(find.text('Groups').first);
+    await _shot(t, '14-groups');
   }, skip: skip != null);
 
   testWidgets('settings', (t) async {

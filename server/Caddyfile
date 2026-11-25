@@ -1,0 +1,39 @@
+# /etc/caddy/Caddyfile: HTTPS on 8443 for the Flock app (router forwards it).
+# Same certificate as MQTT (private CA, bundled in the app).
+#   /flock/api/*      accounts and groups (flock-server, does its own login)
+#   /api/0/locations  Recorder history, only for yourself and your groups
+#   everything else   404
+{
+	auto_https off
+	admin off
+}
+
+:8443 {
+	tls /etc/mosquitto/certs/server-ddns.crt /etc/mosquitto/certs/server-ddns.key
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 5MiB
+			roll_keep 2
+		}
+	}
+	header -Server
+
+	handle /flock/api/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+
+	@history {
+		method GET
+		path /api/0/locations /api/0/version
+	}
+	handle @history {
+		forward_auth 127.0.0.1:8091 {
+			uri /check
+		}
+		reverse_proxy 127.0.0.1:8083
+	}
+
+	handle {
+		respond 404
+	}
+}
