@@ -108,7 +108,7 @@ Then add these repository secrets (Settings → Secrets and variables → Action
 `ANDROID_KEYSTORE_BASE64` (output of `base64 -w0 flock-release.jks`),
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` (`flock`) and
 `ANDROID_KEY_PASSWORD`. Keep the `.jks` file safe; losing it means everyone
-has to uninstall and reinstall. Optionally add `MAPS_API_KEY` to enable Google
+has to uninstall and reinstall. Optionally add `GOOGLE_API_KEY` to enable Google
 Maps in release builds, and `CARTO_API_KEY` to use your own CARTO key for the
 standard map (without it, the free keyless CARTO tiles are used).
 

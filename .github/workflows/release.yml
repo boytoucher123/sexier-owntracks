@@ -52,7 +52,7 @@ jobs:
       # Optional repository secrets:
       #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
       #   ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD  -> stable release signing
-      #   MAPS_API_KEY                             -> offer Google Maps
+      #   GOOGLE_API_KEY                           -> offer Google Maps
       #   CARTO_API_KEY                            -> keyed CARTO map tiles
       - name: Set up signing key
         env:
@@ -70,9 +70,11 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          MAPS_API_KEY: ${{ secrets.GOOGLE_API_KEY || secrets.MAPS_API_KEY }}
           CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
         run: |
+          [ -n "$MAPS_API_KEY" ] && echo "Google Maps key: set" || echo "::warning::No GOOGLE_API_KEY secret, so Google Maps won't be offered."
+          [ -n "$CARTO_API_KEY" ] && echo "CARTO key: set" || echo "::warning::No CARTO_API_KEY secret, using keyless CARTO tiles."
           flutter pub get
           flutter build apk --release --dart-define=CARTO_API_KEY="$CARTO_API_KEY"
           mv build/app/outputs/flutter-apk/app-release.apk "Flock-$TAG.apk"
@@ -97,7 +99,12 @@ jobs:
       - name: Build unsigned iOS app
         env:
           CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY || secrets.MAPS_API_KEY }}
         run: |
+          # Info.plist reads GMSApiKey from this git-ignored file.
+          if [ -n "$GOOGLE_API_KEY" ]; then
+            printf 'GOOGLE_MAPS_API_KEY=%s\n' "$GOOGLE_API_KEY" > ios/Flutter/Secrets.xcconfig
+          fi
           flutter pub get
           flutter build ios --release --no-codesign --dart-define=CARTO_API_KEY="$CARTO_API_KEY"
           mkdir -p Payload
