@@ -102,6 +102,13 @@ class _Accounts extends AccountService {
   bool hasGroup = true;
   bool zoeAsking = true;
 
+  /// Groups from before group settings run on this server; new ones have
+  /// no server until their leader adds one.
+  Map<String, Object?>? config = {
+    'standard': true,
+    'tracking_mode': 'balanced',
+  };
+
   Map<String, dynamic> _me() => {
     'username': 'fred-durk',
     'name': 'Fred Durk',
@@ -114,6 +121,7 @@ class _Accounts extends AccountService {
           'leader': 'fred-durk',
           'role': 'leader',
           'code': 'K7Q-2MX',
+          'config': config,
           'members': [
             for (final (u, n) in _crewMembers)
               {'username': u, 'name': n, 'leader': u == 'fred-durk'},
@@ -154,6 +162,7 @@ class _Accounts extends AccountService {
   Future<Account> createGroup(AppSettings s, String name) async {
     hasGroup = true;
     zoeAsking = false;
+    config = null;
     return Account.fromJson(_me());
   }
 
@@ -493,6 +502,13 @@ void main() {
     await t.tap(find.text('Start'));
     await _settle(t);
     await _shot(t, '04-group-code');
+
+    // The new group has no server yet: the leader sets one up.
+    await t.tap(find.text('Set up'));
+    await _settle(t);
+    await _shot(t, '15-group-settings');
+    await t.pageBack();
+    await _settle(t);
 
     await t.tap(find.text('Continue'));
     await _shot(t, '04-location');

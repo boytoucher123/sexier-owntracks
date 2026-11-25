@@ -53,6 +53,70 @@ class JoinRequest {
   final DateTime requested;
 }
 
+/// Where a group's locations go and how often its members report. Set by
+/// the group's leader; members get it automatically.
+class GroupConfig {
+  const GroupConfig({
+    required this.standard,
+    this.host = '',
+    this.port = 8883,
+    this.tls = true,
+    this.ca = '',
+    this.recorderUrl = '',
+    this.username = '',
+    this.password = '',
+    this.topicPrefix = 'owntracks',
+    this.trackingMode = TrackingMode.balanced,
+  });
+
+  /// Runs on this app's own server, with each person's own login. Only
+  /// groups from before group settings existed are like this.
+  final bool standard;
+  final String host;
+  final int port;
+  final bool tls;
+
+  /// PEM of the CA that signed the group server's certificate ('' = a
+  /// normal public certificate).
+  final String ca;
+  final String recorderUrl;
+
+  /// The login everyone in the group uses on the group's own server.
+  final String username;
+  final String password;
+  final String topicPrefix;
+  final TrackingMode trackingMode;
+
+  factory GroupConfig.fromJson(Map<String, dynamic> j) => GroupConfig(
+    standard: j['standard'] == true,
+    host: j['host'] as String? ?? '',
+    port: (j['port'] as num?)?.toInt() ?? 8883,
+    tls: j['tls'] as bool? ?? true,
+    ca: j['ca'] as String? ?? '',
+    recorderUrl: j['recorder_url'] as String? ?? '',
+    username: j['username'] as String? ?? '',
+    password: j['password'] as String? ?? '',
+    topicPrefix: j['topic_prefix'] as String? ?? 'owntracks',
+    trackingMode: TrackingMode.values.firstWhere(
+      (m) => m.name == j['tracking_mode'],
+      orElse: () => TrackingMode.balanced,
+    ),
+  );
+
+  /// The body for setting your own server (leaders only).
+  Map<String, Object?> toServerJson() => {
+    'host': host,
+    'port': port,
+    'tls': tls,
+    'ca': ca,
+    'recorder_url': recorderUrl,
+    'username': username,
+    'password': password,
+    'topic_prefix': topicPrefix,
+    'tracking_mode': trackingMode.name,
+  };
+}
+
 class Group {
   const Group({
     required this.id,
@@ -62,6 +126,7 @@ class Group {
     required this.members,
     this.code,
     this.requests = const [],
+    this.config,
   });
   final int id;
   final String name;
@@ -72,6 +137,16 @@ class Group {
   /// The invite code, like `K7Q-2MX`. Only the leader gets it.
   final String? code;
   final List<JoinRequest> requests;
+
+  /// Null until the leader sets the group up (a server to use).
+  final GroupConfig? config;
+
+  bool hasMember(String username) => members.any((m) => m.username == username);
+
+  String? memberName(String username) => members
+      .where((m) => m.username == username)
+      .map((m) => m.name)
+      .firstOrNull;
 
   String get leaderName =>
       members.where((m) => m.leader).map((m) => m.name).firstOrNull ?? leader;
@@ -97,8 +172,11 @@ class Account {
     this.groups = const [],
     this.pending = const [],
     this.visible = const {},
+    this.json = const {},
   });
 
+  /// The server's answer as it came, kept so the app can start offline.
+  final Map<String, dynamic> json;
   final String username;
   final String name;
   final List<Group> groups;
@@ -125,6 +203,7 @@ class Account {
         if (e is Map) Map<String, dynamic>.from(e),
     ];
     return Account(
+      json: j,
       username: j['username'] as String? ?? '',
       name: j['name'] as String? ?? '',
       groups: [
@@ -135,6 +214,9 @@ class Account {
             leader: g['leader'] as String? ?? '',
             isLeader: g['role'] == 'leader',
             code: g['code'] as String?,
+            config: g['config'] is Map
+                ? GroupConfig.fromJson(Map<String, dynamic>.from(g['config']))
+                : null,
             members: [
               for (final m in list(g['members']))
                 GroupMember(
@@ -244,6 +326,16 @@ class AccountService {
       Account.fromJson(
         await _call('PATCH', '/groups/$group', login: s, body: {'name': name}),
       );
+
+  /// Leader only. `{'tracking_mode': ...}` alone keeps the server; a full
+  /// [GroupConfig.toServerJson] puts the group on the leader's own server.
+  Future<Account> setConfig(
+    AppSettings s,
+    int group,
+    Map<String, Object?> body,
+  ) async => Account.fromJson(
+    await _call('PUT', '/groups/$group/config', login: s, body: body),
+  );
 
   Future<Account> makeLeader(AppSettings s, int group, String user) async =>
       Account.fromJson(

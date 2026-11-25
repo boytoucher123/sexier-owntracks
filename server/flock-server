@@ -23,6 +23,7 @@ Command line (also installed as flock-admin):
   flock-server groups           list groups, members and requests
   flock-server add-user NAME    make an account by hand, prints the login
   flock-server delete-user USER
+  flock-server set-standard GROUP_ID   run a group on this server (owner only)
   flock-server rewrite-acl      regenerate the ACL file and reload mosquitto
 """
 import base64
@@ -53,6 +54,13 @@ SERVICE_USERS = {"recorder"}        # accounts that aren't people
 RESERVED = {"recorder", "admin", "root", "class_of_2024", "class-of-2024", "test"}
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I
 MAX_NAME = 40
+TRACKING_MODES = ("batterySaver", "balanced", "precise")
+
+# Groups that existed before group settings were added run on this server
+# ("standard"). Every newer group brings its own server; only the server
+# owner can move a group onto this one (`flock-admin set-standard`).
+STANDARD = {"standard": True, "tracking_mode": "balanced"}
+_STD_SQL = "json_extract(g.config, '$.standard') = 1"
 
 SIGNUPS_PER_IP_HOUR = 3
 SIGNUPS_PER_DAY = 30
@@ -197,7 +205,8 @@ def db():
         CREATE TABLE IF NOT EXISTS groups (
           id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
           leader TEXT NOT NULL REFERENCES users(username),
-          code TEXT NOT NULL UNIQUE, created INTEGER NOT NULL);
+          code TEXT NOT NULL UNIQUE, created INTEGER NOT NULL,
+          config TEXT);
         CREATE TABLE IF NOT EXISTS members (
           group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
           username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
@@ -206,6 +215,12 @@ def db():
           PRIMARY KEY (group_id, username));
         """
     )
+    cols = [r[1] for r in c.execute("PRAGMA table_info(groups)")]
+    if "config" not in cols:
+        # One-time upgrade: the groups that exist now keep using this server.
+        with c:
+            c.execute("ALTER TABLE groups ADD COLUMN config TEXT")
+            c.execute("UPDATE groups SET config = ?", (json.dumps(STANDARD),))
     _conn = c
     return c
 
@@ -218,14 +233,33 @@ def _new_code(c):
 
 
 def _visible(c, me):
-    """Usernames I share a group with (approved members only), not me."""
+    """Usernames I share a group on this server with (approved members), not me."""
     rows = c.execute(
-        """SELECT DISTINCT o.username FROM members m
-           JOIN members o ON o.group_id = m.group_id AND o.status = 'member'
-           WHERE m.username = ? AND m.status = 'member' AND o.username != ?""",
+        f"""SELECT DISTINCT o.username FROM members m
+            JOIN groups g ON g.id = m.group_id AND {_STD_SQL}
+            JOIN members o ON o.group_id = m.group_id AND o.status = 'member'
+            WHERE m.username = ? AND m.status = 'member' AND o.username != ?""",
         (me, me),
     )
     return sorted(r[0] for r in rows)
+
+
+def _on_this_server(c, user, include_pending=True):
+    """Whether user may use this server's broker at all: a member (or, for
+    publishing their card while waiting, a requester) of a standard group."""
+    statuses = "('member', 'pending')" if include_pending else "('member')"
+    return c.execute(
+        f"""SELECT 1 FROM members m JOIN groups g ON g.id = m.group_id
+            WHERE m.username = ? AND m.status IN {statuses} AND {_STD_SQL}""",
+        (user,),
+    ).fetchone() is not None
+
+
+def _config(g):
+    try:
+        return json.loads(g["config"]) if g["config"] else None
+    except ValueError:
+        return None
 
 
 def _group(c, gid):
@@ -269,14 +303,19 @@ def acl_text(c):
         "user recorder",
         f"topic read {BASE}/#",
     ]
-    for (u,) in c.execute("SELECT username FROM users ORDER BY username"):
+    for (u,) in c.execute("SELECT username FROM users ORDER BY username").fetchall():
+        # Accounts outside every group on this server get no rules at all:
+        # they can't publish or read anything here.
+        if not _on_this_server(c, u):
+            continue
         out += ["", f"user {u}", f"topic readwrite {BASE}/{u}/#"]
         for o in _visible(c, u):
             out += [f"topic read {BASE}/{o}/#", f"topic write {BASE}/{o}/{DEVICE}/cmd"]
         # Leaders see who is asking to join: their name and photo card.
         for (p,) in c.execute(
-            """SELECT m.username FROM members m JOIN groups g ON g.id = m.group_id
-               WHERE g.leader = ? AND m.status = 'pending' ORDER BY m.username""",
+            f"""SELECT m.username FROM members m JOIN groups g ON g.id = m.group_id
+                WHERE g.leader = ? AND m.status = 'pending' AND {_STD_SQL}
+                ORDER BY m.username""",
             (u,),
         ):
             out.append(f"topic read {BASE}/{p}/{DEVICE}/info")
@@ -384,7 +423,11 @@ def me(user):
                 )
             ]
             item = {"id": g["id"], "name": g["name"], "leader": g["leader"],
-                    "role": "leader" if is_leader else "member", "members": members}
+                    "role": "leader" if is_leader else "member", "members": members,
+                    # Where the group's locations go and how often members
+                    # report. Only approved members get it (it can hold the
+                    # login for the group's own server). None = not set up yet.
+                    "config": _config(g)}
             if is_leader:
                 item["code"] = format_code(g["code"])
                 item["requests"] = [
@@ -522,6 +565,83 @@ def rename_group(user, gid, name):
     return me(user)
 
 
+def _check_config(body):
+    """A leader's own server for the group, plus its tracking mode."""
+    def text(key, limit, required=False):
+        v = body.get(key, "")
+        if v is None:
+            v = ""
+        if not isinstance(v, str) or len(v) > limit:
+            raise ApiError(400, f"'{key}' is too long.")
+        v = v.strip()
+        if required and not v:
+            raise ApiError(400, f"Fill in '{key}'.")
+        return v
+
+    host = text("host", 253, required=True)
+    if re.search(r"[\s/:]", host):
+        raise ApiError(400, "Enter just the server name, like mqtt.example.com.")
+    port = body.get("port", 8883)
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ApiError(400, "The port must be a number from 1 to 65535.")
+    tls = body.get("tls", True)
+    if not isinstance(tls, bool):
+        raise ApiError(400, "'tls' must be true or false.")
+    ca = text("ca", 12000)
+    if ca and "-----BEGIN CERTIFICATE-----" not in ca:
+        raise ApiError(400, "The certificate must be PEM text (BEGIN CERTIFICATE).")
+    recorder = text("recorder_url", 300)
+    if recorder and not recorder.startswith("https://"):
+        raise ApiError(400, "The history address must start with https://.")
+    mode = body.get("tracking_mode", "balanced")
+    if mode not in TRACKING_MODES:
+        raise ApiError(400, "Unknown tracking mode.")
+    return {
+        "standard": False, "host": host, "port": port, "tls": tls, "ca": ca,
+        "recorder_url": recorder,
+        "username": text("username", 100, required=True),
+        "password": text("password", 200),
+        "topic_prefix": text("topic_prefix", 50) or "owntracks",
+        "tracking_mode": mode,
+    }
+
+
+def set_config(user, gid, body):
+    """Leader sets the group's settings. Only {"tracking_mode"} keeps the
+    current server; anything else is the leader's own server, which takes
+    the group off this one for good."""
+    with _lock:
+        c = db()
+        g = _require_leader(c, gid, user)
+        current = _config(g)
+        if set(body) <= {"tracking_mode"}:
+            if current is None:
+                raise ApiError(400, "Add your server's details first.")
+            mode = body.get("tracking_mode")
+            if mode not in TRACKING_MODES:
+                raise ApiError(400, "Unknown tracking mode.")
+            new = dict(current, tracking_mode=mode)
+        else:
+            new = _check_config(body)
+        with c:
+            c.execute("UPDATE groups SET config=? WHERE id=?", (json.dumps(new), gid))
+            write_acl(c)
+    return me(user)
+
+
+def set_standard(gid, mode="balanced"):
+    """Owner only (command line): run a group on this server."""
+    with _lock:
+        c = db()
+        _group(c, gid)
+        with c:
+            c.execute(
+                "UPDATE groups SET config=? WHERE id=?",
+                (json.dumps(dict(STANDARD, tracking_mode=mode)), gid),
+            )
+            write_acl(c)
+
+
 def make_leader(user, gid, other):
     with _lock:
         c = db()
@@ -550,10 +670,11 @@ def history_allowed(user, uri, method):
     who = q.get("user", [""])
     if len(who) != 1:
         return False
-    if who[0] == user:
-        return True
     with _lock:
-        return who[0] in _visible(db(), user)
+        c = db()
+        if who[0] == user:
+            return _on_this_server(c, user, include_pending=False)
+        return who[0] in _visible(c, user)
 
 
 # ------------------------------------------------------------------- HTTP --
@@ -568,6 +689,7 @@ ROUTES = [
     ("PATCH", r"/flock/api/groups/(\d+)", "rename_group"),
     ("POST", r"/flock/api/groups/(\d+)/code", "new_code"),
     ("POST", r"/flock/api/groups/(\d+)/leader", "make_leader"),
+    ("PUT", r"/flock/api/groups/(\d+)/config", "set_config"),
     ("POST", r"/flock/api/groups/(\d+)/requests/([a-z0-9-]+)/(approve|deny)", "decide"),
     ("DELETE", r"/flock/api/groups/(\d+)/members/([a-z0-9-]+)", "remove_member"),
 ]
@@ -599,7 +721,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
-        if n > 4096:
+        if n > 16384:
             raise ApiError(413, "Too much data.")
         if n == 0:
             return {}
@@ -640,7 +762,7 @@ class Handler(BaseHTTPRequestHandler):
         user = authenticate(self.headers.get("Authorization"), self._ip())
         if name == "me":
             return self._send(200, me(user))
-        body = self._body() if self.command in ("POST", "PATCH") else {}
+        body = self._body() if self.command in ("POST", "PATCH", "PUT") else {}
         if name == "rename":
             return self._send(200, rename(user, body.get("name")))
         if name == "delete_me":
@@ -655,6 +777,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, rename_group(user, gid, body.get("name")))
         if name == "new_code":
             return self._send(200, new_code(user, gid))
+        if name == "set_config":
+            return self._send(200, set_config(user, gid, body))
         if name == "make_leader":
             return self._send(200, make_leader(user, gid, str(body.get("username", ""))))
         if name == "decide":
@@ -671,6 +795,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         self._handle("PATCH")
+
+    def do_PUT(self):
+        self._handle("PUT")
 
     def do_DELETE(self):
         self._handle("DELETE")
@@ -693,7 +820,12 @@ def cli(argv):
             print(f"{r['username']:22} {r['name']:30} {time.strftime('%F', time.localtime(r['created']))}")
     elif cmd == "groups":
         for g in c.execute("SELECT * FROM groups ORDER BY id"):
-            print(f"#{g['id']} {g['name']}  leader={g['leader']}  code={format_code(g['code'])}")
+            cfg = _config(g)
+            where = ("this server" if cfg and cfg.get("standard")
+                     else cfg["host"] if cfg else "not set up")
+            mode = cfg.get("tracking_mode") if cfg else "-"
+            print(f"#{g['id']} {g['name']}  leader={g['leader']}  code={format_code(g['code'])}"
+                  f"  server={where}  tracking={mode}")
             for m in c.execute(
                 "SELECT username, status FROM members WHERE group_id=? ORDER BY status, username",
                 (g["id"],),
@@ -705,6 +837,9 @@ def cli(argv):
     elif cmd == "delete-user" and len(argv) == 2:
         delete_user(argv[1])
         print("deleted", argv[1])
+    elif cmd == "set-standard" and len(argv) == 2:
+        set_standard(int(argv[1]))
+        print(f"group #{argv[1]} now runs on this server")
     elif cmd == "rewrite-acl":
         write_acl(c)
         print("ACL written to", ACL)

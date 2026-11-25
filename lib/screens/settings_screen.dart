@@ -8,8 +8,8 @@ import '../services/mqtt_service.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
-import '../widgets/connection_form.dart';
 import '../widgets/family_map.dart';
+import 'group_settings_screen.dart';
 import 'groups_screen.dart';
 import 'photo_crop_screen.dart';
 
@@ -111,43 +111,7 @@ class SettingsScreen extends StatelessWidget {
                     app.updateSettings(s.copyWith(sharingLocation: v)),
               ),
               const Divider(height: 1, indent: 16, endIndent: 16),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-                child: SegmentedButton<TrackingMode>(
-                  segments: const [
-                    ButtonSegment(
-                      value: TrackingMode.batterySaver,
-                      label: Text('Saver'),
-                    ),
-                    ButtonSegment(
-                      value: TrackingMode.balanced,
-                      label: Text('Balanced'),
-                    ),
-                    ButtonSegment(
-                      value: TrackingMode.precise,
-                      label: Text('Precise'),
-                    ),
-                  ],
-                  selected: {s.trackingMode},
-                  onSelectionChanged: s.sharingLocation
-                      ? (v) => app.updateSettings(
-                          s.copyWith(trackingMode: v.first),
-                        )
-                      : null,
-                  showSelectedIcon: false,
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
-                child: Text(switch (s.trackingMode) {
-                  TrackingMode.batterySaver =>
-                    'Updates when you move about 500 m. Easiest on battery.',
-                  TrackingMode.balanced =>
-                    'Updates every ~100 m of movement. Recommended.',
-                  TrackingMode.precise =>
-                    'Frequent, exact updates. Uses noticeably more battery.',
-                }, style: TextStyle(color: cs.onSurfaceVariant)),
-              ),
+              _GroupTrackingTile(app: app),
             ],
           ),
 
@@ -162,7 +126,10 @@ class SettingsScreen extends StatelessWidget {
                 leading: _statusDot(app.mqtt.status.value),
                 title: Text(_statusText(app.mqtt.status.value)),
                 subtitle: Text(
-                  app.mqtt.lastError.value ?? '${s.host}:${s.port}',
+                  app.mqtt.lastError.value ??
+                      (app.connection == null
+                          ? 'No group server yet'
+                          : '${app.connection!.host}:${app.connection!.port}'),
                 ),
                 trailing: TextButton(
                   onPressed: () => app.updateSettings(s, reconnect: true),
@@ -185,36 +152,18 @@ class SettingsScreen extends StatelessWidget {
                   subtitle: const Text('You shouldn\'t need these'),
                   children: [
                     _InfoRow('Account', '@${s.username}'),
-                    _InfoRow('Publishes to', s.ownTopic),
                     _InfoRow(
-                      'Listens to',
-                      'People in your groups (the server decides)',
+                      'Publishes to',
+                      app.connection?.ownTopic ?? 'Nothing yet',
                     ),
-                    ListTile(
-                      leading: const Icon(Icons.dns_rounded),
-                      title: const Text('Server & login'),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const _ServerSettingsPage(),
-                        ),
-                      ),
+                    _InfoRow(
+                      'Server',
+                      app.connection == null
+                          ? 'None: your group isn\'t set up'
+                          : app.onOwnServer
+                          ? '${app.connection!.host} (${app.activeGroup!.name}\'s own)'
+                          : 'This app\'s server',
                     ),
-                    ListTile(
-                      leading: const Icon(Icons.timeline_rounded),
-                      title: const Text('Location history'),
-                      subtitle: Text(
-                        s.hasRecorder ? s.recorderUrl : 'Not set up',
-                      ),
-                      trailing: const Icon(Icons.chevron_right_rounded),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const _HistorySettingsPage(),
-                        ),
-                      ),
-                    ),
-
-                    _InfoRow('Client ID', app.clientId),
                     ListTile(
                       title: const Text('Keep-alive'),
                       subtitle: Text('${s.keepAliveSeconds} seconds'),
@@ -623,156 +572,35 @@ class _ProfileSheetState extends State<_ProfileSheet> {
   }
 }
 
-// ----------------------------------------------------------------- server --
-
-class _ServerSettingsPage extends StatefulWidget {
-  const _ServerSettingsPage();
-  @override
-  State<_ServerSettingsPage> createState() => _ServerSettingsPageState();
-}
-
-class _ServerSettingsPageState extends State<_ServerSettingsPage> {
-  late final AppState app = context.read<AppState>();
-  late AppSettings _draft = app.settings;
+/// Tracking mode is the group's: the leader sets it, everyone else sees it.
+class _GroupTrackingTile extends StatelessWidget {
+  const _GroupTrackingTile({required this.app});
+  final AppState app;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Server & login')),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          Text(
-            'For testing only. Your account was made for you; changing these '
-            'signs this phone in as someone else.',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 16),
-          ConnectionForm(
-            initial: _draft,
-            onTest: app.testConnection,
-            onChanged: (s) => setState(() => _draft = s),
-          ),
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _draft.hasConnectionDetails
-                ? () async {
-                    await app.updateSettings(_draft, reconnect: true);
-                    if (context.mounted) Navigator.pop(context);
-                  }
-                : null,
-            child: const Text('Save and reconnect'),
-          ),
-        ],
+    final cs = Theme.of(context).colorScheme;
+    final g = app.activeGroup;
+    final mode = app.connection?.trackingMode;
+    final leader = g != null && g.isLeader;
+    return ListTile(
+      leading: const Icon(Icons.speed_rounded),
+      title: Text(mode == null ? 'Tracking' : 'Tracking: ${mode.label}'),
+      subtitle: Text(
+        g == null
+            ? 'Join or start a group to start sharing.'
+            : g.config == null
+            ? '${g.name} isn\'t set up yet.'
+            : '${mode!.description} Set by ${leader ? 'you' : g.leaderName} '
+                  'for ${g.name}.',
+        style: TextStyle(color: cs.onSurfaceVariant),
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------- history --
-
-class _HistorySettingsPage extends StatefulWidget {
-  const _HistorySettingsPage();
-  @override
-  State<_HistorySettingsPage> createState() => _HistorySettingsPageState();
-}
-
-class _HistorySettingsPageState extends State<_HistorySettingsPage> {
-  late final AppState app = context.read<AppState>();
-  late final _url = TextEditingController(text: app.settings.recorderUrl);
-  late final _user = TextEditingController(text: app.settings.recorderUsername);
-  late final _pass = TextEditingController(text: app.settings.recorderPassword);
-  bool _testing = false;
-  String? _message;
-  bool _ok = false;
-
-  @override
-  void dispose() {
-    _url.dispose();
-    _user.dispose();
-    _pass.dispose();
-    super.dispose();
-  }
-
-  AppSettings get _draft => app.settings.copyWith(
-    recorderUrl: _url.text.trim(),
-    recorderUsername: _user.text.trim(),
-    recorderPassword: _pass.text,
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Location history')),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          const Text(
-            'History comes from the OwnTracks Recorder on your server. Enter its web '
-            'address. Leave the login blank to use your normal username and password.',
-          ),
-          const SizedBox(height: 20),
-          TextField(
-            controller: _url,
-            keyboardType: TextInputType.url,
-            autocorrect: false,
-            decoration: const InputDecoration(
-              labelText: 'Recorder address',
-              hintText: 'https://tracking.example.com/owntracks',
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _user,
-            autocorrect: false,
-            decoration: const InputDecoration(labelText: 'Username (optional)'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _pass,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'Password (optional)'),
-          ),
-          const SizedBox(height: 20),
-          OutlinedButton(
-            onPressed: _testing
-                ? null
-                : () async {
-                    setState(() => _testing = true);
-                    final err = await app.testRecorder(_draft);
-                    if (!mounted) return;
-                    setState(() {
-                      _testing = false;
-                      _ok = err == null;
-                      _message = err ?? 'History server found.';
-                    });
-                  },
-            child: Text(_testing ? 'Checking…' : 'Check address'),
-          ),
-          if (_message != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Row(
-                children: [
-                  Icon(
-                    _ok ? Icons.check_circle_rounded : Icons.error_rounded,
-                    color: _ok ? FlockColors.online : FlockColors.danger,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text(_message!)),
-                ],
-              ),
-            ),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () async {
-              await app.updateSettings(_draft);
-              if (context.mounted) Navigator.pop(context);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      trailing: leader ? const Icon(Icons.chevron_right_rounded) : null,
+      onTap: leader
+          ? () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => GroupSettingsScreen(group: g)),
+            )
+          : null,
     );
   }
 }

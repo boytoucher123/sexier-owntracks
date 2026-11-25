@@ -36,6 +36,12 @@ and your data stays on your server.
   the code can ask to join, and the leader sees their name and photo and taps
   **Let in**. You only see people you share a group with, and the broker
   enforces that.
+- **Group settings:** each group carries its server and tracking mode
+  (Saver/Balanced/Precise), set by the leader. Members get them
+  automatically and never see a server setting. The groups that existed
+  first run on this app's server; every new group brings its own (an MQTT
+  broker its leader runs) and can't track until the leader adds it. If
+  you're in more than one group, you pick which one is on your map.
 - **Battery modes:** Saver, Balanced, or Precise.
 - **Maps:** Google Maps by default (when the build has a key), with
   Satellite, Streets, Terrain and Dark styles. Satellite is the default.

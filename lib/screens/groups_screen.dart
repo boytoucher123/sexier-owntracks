@@ -11,6 +11,7 @@ import '../state/app_state.dart';
 import '../theme.dart';
 import '../util/format.dart';
 import '../widgets/avatar.dart';
+import 'group_settings_screen.dart';
 
 /// Your groups: who's in them, invite codes, and people asking to join.
 class GroupsScreen extends StatefulWidget {
@@ -129,6 +130,7 @@ class GroupCard extends StatelessWidget {
                 ),
               ],
             ),
+            _GroupSetup(group: g),
             if (g.isLeader && g.code != null) ...[
               const SizedBox(height: 8),
               Padding(
@@ -196,6 +198,94 @@ class GroupCard extends StatelessWidget {
     final err = await app.leaveGroup(g);
     if (!context.mounted) return;
     _report(context, err);
+  }
+}
+
+/// The group's server and tracking, which members get automatically, and
+/// which group the map shows when you're in more than one.
+class _GroupSetup extends StatelessWidget {
+  const _GroupSetup({required this.group});
+  final Group group;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final g = group;
+    final c = g.config;
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final several = (app.account?.groups.length ?? 0) > 1;
+    final active = app.activeGroup?.id == g.id;
+    void open() => Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => GroupSettingsScreen(group: g)));
+
+    final Widget info;
+    if (c == null) {
+      info = Container(
+        margin: const EdgeInsets.only(top: 8, right: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: FlockColors.warning.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: FlockColors.warning),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                g.isLeader
+                    ? 'Not set up yet. Add a server so the group can share '
+                          'locations.'
+                    : 'Waiting for ${g.leaderName} to set up a server for the '
+                          'group.',
+              ),
+            ),
+            if (g.isLeader)
+              TextButton(onPressed: open, child: const Text('Set up')),
+          ],
+        ),
+      );
+    } else {
+      final server = c.standard ? 'This app\'s server' : c.host;
+      info = ListTile(
+        contentPadding: const EdgeInsets.only(right: 4),
+        leading: Icon(Icons.tune_rounded, color: cs.primary),
+        title: Text('Tracking: ${c.trackingMode.label}'),
+        subtitle: Text(
+          'Server: $server',
+          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+        ),
+        trailing: g.isLeader
+            ? TextButton(onPressed: open, child: const Text('Settings'))
+            : null,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        info,
+        if (several)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: active
+                ? Chip(
+                    avatar: const Icon(Icons.map_rounded, size: 18),
+                    label: const Text('On your map now'),
+                    side: BorderSide.none,
+                    backgroundColor: cs.primary.withOpacity(0.1),
+                  )
+                : OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 40),
+                    ),
+                    onPressed: () => app.setActiveGroup(g),
+                    icon: const Icon(Icons.map_outlined),
+                    label: const Text('Show this group on my map'),
+                  ),
+          ),
+      ],
+    );
   }
 }
 

@@ -54,19 +54,26 @@ class Api:
             return e.code, (json.loads(raw) if raw else None)
 
 
-class FlockServerTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+_api = None
+
+
+def server():
+    """One flock-server for all tests, on temporary files."""
+    global _api
+    if _api is None:
         # The Recorder's own account already exists, as on the real server.
         with open(fs.PASSWD, "w") as f:
             f.write("recorder:" + fs.hash_password("recorder-secret") + "\n")
-        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), fs.Handler)
-        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
-        cls.api = Api(cls.httpd.server_address[1])
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), fs.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        _api = Api(httpd.server_address[1])
+    return _api
 
+
+class FlockServerTest(unittest.TestCase):
     @classmethod
-    def tearDownClass(cls):
-        cls.httpd.shutdown()
+    def setUpClass(cls):
+        cls.api = server()
 
     def setUp(self):
         fs._signups.clear()
@@ -146,6 +153,7 @@ class FlockServerTest(unittest.TestCase):
         s, me = self.api.call("POST", "/flock/api/groups", {"name": "Class of 2024"}, login=leader)
         self.assertEqual(s, 201)
         g = me["groups"][0]
+        fs.set_standard(g["id"])   # a group that runs on this server
         self.assertEqual((g["role"], g["name"]), ("leader", "Class of 2024"))
         self.assertRegex(g["code"], r"^[A-Z2-9]{3}-[A-Z2-9]{3}$")
 
@@ -238,6 +246,141 @@ class FlockServerTest(unittest.TestCase):
             self.api.call("POST", "/flock/api/join", {"code": "AAA-AAA"}, login=a)
         s, _ = self.api.call("POST", "/flock/api/join", {"code": "AAA-AAA"}, login=a)
         self.assertEqual(s, 429)
+
+
+
+class GroupConfigTest(unittest.TestCase):
+    """Group settings: new groups bring their own server; only standard
+    groups get to use this one."""
+
+    api = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.api = server()
+
+    def setUp(self):
+        fs._signups.clear()
+        fs._signups_ip.clear()
+        fs._joins.clear()
+
+    def signup(self, name):
+        s, b = self.api.call("POST", "/flock/api/signup", {"name": name}, ip=f"10.3.{len(fs._signups)}.1")
+        self.assertEqual(s, 201, b)
+        return b
+
+    def group(self, leader, name):
+        _, me = self.api.call("POST", "/flock/api/groups", {"name": name}, login=leader)
+        return [g for g in me["groups"] if g["name"] == name][0]
+
+    def test_new_groups_get_nothing_on_this_server(self):
+        leader = self.signup("Random Leader")
+        friend = self.signup("Random Friend")
+        g = self.group(leader, "Randoms")
+        self.assertIsNone(g["config"])
+        self.api.call("POST", "/flock/api/join", {"code": g["code"]}, login=friend)
+        self.api.call("POST", f"/flock/api/groups/{g['id']}/requests/{friend['username']}/approve", login=leader)
+        acl = open(fs.ACL).read()
+        self.assertNotIn(f"user {leader['username']}\n", acl)
+        self.assertNotIn(f"user {friend['username']}\n", acl)
+        s, _ = self.api.call("GET", "/check", login=leader, headers={
+            "X-Forwarded-Uri": f"/api/0/locations?user={leader['username']}", "X-Forwarded-Method": "GET"})
+        self.assertEqual(s, 403)
+        s, _ = self.api.call("GET", "/check", login=friend, headers={
+            "X-Forwarded-Uri": f"/api/0/locations?user={leader['username']}", "X-Forwarded-Method": "GET"})
+        self.assertEqual(s, 403)
+
+    def test_leader_sets_their_own_server_and_members_get_it(self):
+        leader = self.signup("Own Server Leader")
+        friend = self.signup("Own Server Friend")
+        asker = self.signup("Own Server Asker")
+        g = self.group(leader, "Own Server")
+        cfg = {"host": "mqtt.example.com", "port": 8883, "tls": True,
+               "username": "crew", "password": "s3cret",
+               "recorder_url": "https://mqtt.example.com/owntracks",
+               "tracking_mode": "precise"}
+        s, b = self.api.call("PUT", f"/flock/api/groups/{g['id']}/config", cfg, login=friend)
+        self.assertEqual(s, 403)  # not the leader
+        s, me = self.api.call("PUT", f"/flock/api/groups/{g['id']}/config", cfg, login=leader)
+        self.assertEqual(s, 200, me)
+        got = [x for x in me["groups"] if x["id"] == g["id"]][0]["config"]
+        self.assertEqual((got["standard"], got["host"], got["password"], got["tracking_mode"]),
+                         (False, "mqtt.example.com", "s3cret", "precise"))
+        self.assertEqual(got["topic_prefix"], "owntracks")
+
+        self.api.call("POST", "/flock/api/join", {"code": g["code"]}, login=friend)
+        self.api.call("POST", "/flock/api/join", {"code": g["code"]}, login=asker)
+        self.api.call("POST", f"/flock/api/groups/{g['id']}/requests/{friend['username']}/approve", login=leader)
+        _, fme = self.api.call("GET", "/flock/api/me", login=friend)
+        self.assertEqual(fme["groups"][0]["config"]["username"], "crew")
+        _, ame = self.api.call("GET", "/flock/api/me", login=asker)
+        self.assertNotIn("config", json.dumps(ame["pending"]))  # not until let in
+        self.assertNotIn("s3cret", json.dumps(ame))
+
+        # Tracking mode alone keeps the server.
+        s, me = self.api.call("PUT", f"/flock/api/groups/{g['id']}/config", {"tracking_mode": "batterySaver"}, login=leader)
+        got = [x for x in me["groups"] if x["id"] == g["id"]][0]["config"]
+        self.assertEqual((got["host"], got["tracking_mode"]), ("mqtt.example.com", "batterySaver"))
+
+    def test_bad_settings_are_refused_in_plain_english(self):
+        leader = self.signup("Bad Config Leader")
+        g = self.group(leader, "Bad Config")
+        def put(body):
+            return self.api.call("PUT", f"/flock/api/groups/{g['id']}/config", body, login=leader)
+        s, b = put({"tracking_mode": "precise"})
+        self.assertEqual((s, b["error"]), (400, "Add your server's details first."))
+        s, b = put({"host": "https://x.com/", "username": "u"})
+        self.assertEqual(s, 400)
+        self.assertIn("server name", b["error"])
+        s, b = put({"host": "x.com", "username": "u", "port": 70000})
+        self.assertEqual(s, 400)
+        s, b = put({"host": "x.com", "username": "u", "ca": "not a cert"})
+        self.assertIn("PEM", b["error"])
+        s, b = put({"host": "x.com"})
+        self.assertIn("username", b["error"])
+
+    def test_standard_group_can_change_tracking_but_leaving_is_for_good(self):
+        leader = self.signup("Std Leader")
+        g = self.group(leader, "Std")
+        fs.set_standard(g["id"])
+        self.assertIn(f"user {leader['username']}\n", open(fs.ACL).read())
+        s, me = self.api.call("PUT", f"/flock/api/groups/{g['id']}/config", {"tracking_mode": "precise"}, login=leader)
+        got = [x for x in me["groups"] if x["id"] == g["id"]][0]["config"]
+        self.assertEqual(got, {"standard": True, "tracking_mode": "precise"})
+        self.api.call("PUT", f"/flock/api/groups/{g['id']}/config",
+                      {"host": "elsewhere.example", "username": "u"}, login=leader)
+        self.assertNotIn(f"user {leader['username']}\n", open(fs.ACL).read())
+
+
+class MigrationTest(unittest.TestCase):
+    def test_groups_from_before_settings_become_standard(self):
+        import sqlite3
+        path = os.path.join(TMP, "old.db")
+        c = sqlite3.connect(path)
+        c.executescript("""
+            CREATE TABLE users (username TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL);
+            CREATE TABLE groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+              leader TEXT NOT NULL, code TEXT NOT NULL UNIQUE, created INTEGER NOT NULL);
+            INSERT INTO users VALUES ('george', 'George', 1);
+            INSERT INTO groups (name, leader, code, created) VALUES ('Class of 2024', 'george', 'ABCDEF', 1);
+        """)
+        c.commit()
+        c.close()
+        saved_db, saved_conn = fs.DB, fs._conn
+        try:
+            fs.DB, fs._conn = path, None
+            row = fs.db().execute("SELECT config FROM groups").fetchone()
+            self.assertEqual(json.loads(row[0]), {"standard": True, "tracking_mode": "balanced"})
+            c2 = fs.db()
+            c2.execute("INSERT INTO groups (name, leader, code, created) VALUES ('New', 'george', 'GHJKLM', 2)")
+            c2.commit()
+            c2.close()
+            fs._conn = None   # reopening must not upgrade newer groups
+            new = fs.db().execute("SELECT config FROM groups WHERE name='New'").fetchone()
+            self.assertIsNone(new[0])
+        finally:
+            fs._conn.close()
+            fs.DB, fs._conn = saved_db, saved_conn
 
 
 if __name__ == "__main__":

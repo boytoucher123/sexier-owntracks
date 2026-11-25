@@ -18,6 +18,10 @@ import 'package:http/testing.dart';
 Map<String, dynamic> meJson({
   List<String> visible = const ['jack-lee'],
   List<String> requests = const ['zoe-obrien'],
+  Map<String, dynamic>? config = const {
+    'standard': true,
+    'tracking_mode': 'balanced',
+  },
 }) => {
   'username': 'maya-chen',
   'name': 'Maya Chen',
@@ -30,6 +34,7 @@ Map<String, dynamic> meJson({
       'leader': 'maya-chen',
       'role': 'leader',
       'code': 'K7Q-2MX',
+      'config': config,
       'members': [
         {'username': 'maya-chen', 'name': 'Maya Chen', 'leader': true},
         for (final v in visible) {'username': v, 'name': 'Jack Lee'},
@@ -72,25 +77,29 @@ class _Store extends SettingsStore {
 class _Mqtt extends MqttService {
   final _ctl = StreamController<IncomingMessage>.broadcast();
   int refreshes = 0;
+  final connects = <AppSettings>[];
+  int disconnects = 0;
   @override
   Stream<IncomingMessage> get messages => _ctl.stream;
   void inject(String topic, String payload) =>
       _ctl.add(IncomingMessage(topic, payload));
   @override
-  Future<void> connect(AppSettings s, {required String clientId}) async {}
+  Future<void> connect(AppSettings s, {required String clientId}) async =>
+      connects.add(s);
   @override
   bool publish(String topic, String payload, {bool retain = true}) => true;
   @override
   void refreshPeople() => refreshes++;
   @override
-  Future<void> disconnect() async {}
+  Future<void> disconnect() async => disconnects++;
 }
 
 class _Location extends LocationService {
+  final modes = <TrackingMode?>[]; // null = stopped
   @override
-  Future<void> start(TrackingMode mode) async {}
+  Future<void> start(TrackingMode mode) async => modes.add(mode);
   @override
-  Future<void> stop() async {}
+  Future<void> stop() async => modes.add(null);
   @override
   Future<void> reportNow(String trigger) async {}
 }
@@ -291,8 +300,107 @@ void main() {
       final before = mqtt.refreshes;
       accounts.response = meJson(visible: const ['jack-lee', 'sam-o']);
       await app.refreshAccount();
+      await pumpEventQueue();
       expect(mqtt.refreshes, before + 1);
     });
+  });
+
+  group('group settings', () {
+    late _Store store;
+    late _Mqtt mqtt;
+    late _Location loc;
+    late _Accounts accounts;
+    late AppState app;
+
+    Future<void> boot(Map<String, dynamic>? config) async {
+      store = _Store()
+        ..s = const AppSettings(
+          username: 'maya-chen',
+          password: 'mine',
+          displayName: 'Maya Chen',
+          setupComplete: true,
+        );
+      mqtt = _Mqtt();
+      loc = _Location();
+      accounts = _Accounts()..response = meJson(config: config);
+      app = AppState(
+        store: store,
+        mqtt: mqtt,
+        location: loc,
+        accounts: accounts,
+      );
+      await app.init();
+      await app.refreshAccount();
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('a standard group uses this server with your own login', () async {
+      await boot({'standard': true, 'tracking_mode': 'precise'});
+      final c = app.connection!;
+      expect(
+        (c.host, c.port, c.username, c.password),
+        ('owntracks-class-of-2024.duckdns.org', 8883, 'maya-chen', 'mine'),
+      );
+      expect(c.ownTopic, 'owntracks/maya-chen/phone');
+      expect(mqtt.connects.last.username, 'maya-chen');
+      expect(loc.modes.last, TrackingMode.precise); // the leader's choice
+    });
+
+    test(
+      'a group on its own server: shared login, your name as device',
+      () async {
+        await boot({
+          'standard': false,
+          'host': 'mqtt.example.com',
+          'port': 1883,
+          'tls': false,
+          'username': 'crew',
+          'password': 'shared',
+          'topic_prefix': 'ot',
+          'recorder_url': 'https://mqtt.example.com/rec',
+          'tracking_mode': 'batterySaver',
+        });
+        final c = app.connection!;
+        expect(
+          (c.host, c.port, c.useTls, c.username, c.password),
+          ('mqtt.example.com', 1883, false, 'crew', 'shared'),
+        );
+        expect(c.ownTopic, 'ot/crew/maya-chen');
+        expect(c.recorderUrl, 'https://mqtt.example.com/rec');
+        expect(c.caPem, '');
+        expect(app.onOwnServer, isTrue);
+        expect(loc.modes.last, TrackingMode.batterySaver);
+
+        // People on that login show up, named from the group; others don't.
+        mqtt.inject('ot/crew/jack-lee', _loc(-33.87, 151.2));
+        mqtt.inject('ot/someone-else/phone', _loc(-33.87, 151.2));
+        await Future<void>.delayed(Duration.zero);
+        expect(app.people.map((p) => p.device), ['jack-lee']);
+        expect(app.people.single.name, 'Jack Lee');
+      },
+    );
+
+    test('a group without a server: nothing to connect to', () async {
+      await boot(null);
+      expect(app.connection, isNull);
+      expect(mqtt.connects, isEmpty);
+      expect(loc.modes.last, isNull); // not tracking
+    });
+
+    test(
+      'the leader changing tracking switches it without reconnecting',
+      () async {
+        await boot({'standard': true, 'tracking_mode': 'balanced'});
+        final connects = mqtt.connects.length;
+        accounts.response = meJson(
+          config: {'standard': true, 'tracking_mode': 'precise'},
+        );
+        await app.refreshAccount();
+        await Future<void>.delayed(Duration.zero);
+        expect(loc.modes.last, TrackingMode.precise);
+        expect(mqtt.connects.length, connects);
+      },
+    );
   });
 }
 

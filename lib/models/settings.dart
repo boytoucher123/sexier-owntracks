@@ -14,6 +14,22 @@ enum TrackingMode {
   precise,
 }
 
+extension TrackingModeText on TrackingMode {
+  String get label => switch (this) {
+    TrackingMode.batterySaver => 'Saver',
+    TrackingMode.balanced => 'Balanced',
+    TrackingMode.precise => 'Precise',
+  };
+
+  String get description => switch (this) {
+    TrackingMode.batterySaver =>
+      'Updates when you move about 500 m. Easiest on battery.',
+    TrackingMode.balanced => 'Updates every ~100 m of movement. Recommended.',
+    TrackingMode.precise =>
+      'Frequent, exact updates. Uses noticeably more battery.',
+  };
+}
+
 /// Which map tiles to draw.
 enum MapProvider {
   /// Free OpenStreetMap-based tiles (CARTO), with Esri imagery for satellite.
@@ -63,6 +79,8 @@ class AppSettings {
     this.setupComplete = false,
     this.keepAliveSeconds = 60,
     this.allowUntrustedCertificates = false,
+    this.caPem = kServerCaPem,
+    this.activeGroupId = 0,
   });
 
   // --- Connection -----------------------------------------------------------
@@ -92,6 +110,15 @@ class AppSettings {
   final String recorderPassword;
   final int keepAliveSeconds;
   final bool allowUntrustedCertificates;
+
+  /// The CA the server's certificate must chain to, on top of the phone's
+  /// normal ones. Comes from the active group; empty = the phone's own only.
+  /// Not saved: the group's settings fill it in at runtime.
+  final String caPem;
+
+  /// The group whose settings (server, tracking) this phone uses. 0 = the
+  /// first group you're in.
+  final int activeGroupId;
 
   // --- Preferences ----------------------------------------------------------
   final TrackingMode trackingMode;
@@ -133,6 +160,8 @@ class AppSettings {
     bool? setupComplete,
     int? keepAliveSeconds,
     bool? allowUntrustedCertificates,
+    String? caPem,
+    int? activeGroupId,
   }) {
     return AppSettings(
       host: host ?? this.host,
@@ -156,6 +185,8 @@ class AppSettings {
       keepAliveSeconds: keepAliveSeconds ?? this.keepAliveSeconds,
       allowUntrustedCertificates:
           allowUntrustedCertificates ?? this.allowUntrustedCertificates,
+      caPem: caPem ?? this.caPem,
+      activeGroupId: activeGroupId ?? this.activeGroupId,
     );
   }
 
@@ -179,6 +210,7 @@ class AppSettings {
     'setupComplete': setupComplete,
     'keepAliveSeconds': keepAliveSeconds,
     'allowUntrustedCertificates': allowUntrustedCertificates,
+    'activeGroupId': activeGroupId,
   };
 
   factory AppSettings.fromJson(
@@ -220,6 +252,7 @@ class AppSettings {
       setupComplete: pick('setupComplete', false),
       keepAliveSeconds: pick('keepAliveSeconds', 60),
       allowUntrustedCertificates: pick('allowUntrustedCertificates', false),
+      activeGroupId: pick('activeGroupId', 0),
     );
   }
 

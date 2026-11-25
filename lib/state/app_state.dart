@@ -85,7 +85,81 @@ class AppState extends ChangeNotifier {
     return list;
   }
 
-  bool isMe(Person p) => p.topic == _settings.ownTopic;
+  bool isMe(Person p) => p.topic == _ownTopic;
+
+  String get _ownTopic => (connection ?? _settings).ownTopic;
+
+  // --------------------------------------------------------------- groups ---
+
+  /// The group whose settings (server, tracking) this phone uses.
+  Group? get activeGroup {
+    final gs = _account?.groups ?? const <Group>[];
+    return gs.where((g) => g.id == _settings.activeGroupId).firstOrNull ??
+        gs.firstOrNull;
+  }
+
+  /// The active group is on its leader's own server (not this app's).
+  bool get onOwnServer => activeGroup?.config?.standard == false;
+
+  /// What this phone actually connects with: your account, on the active
+  /// group's server, with the group's tracking mode. Null when there's
+  /// nothing to connect to yet (no group, or the group isn't set up).
+  AppSettings? get connection {
+    final s = _settings;
+    if (!s.hasAccount) return null;
+    final c = activeGroup?.config;
+    if (c == null) return null;
+    if (c.standard) {
+      return s.copyWith(
+        host: kDefaultHost,
+        port: kDefaultPort,
+        useTls: true,
+        useWebSocket: false,
+        baseTopic: 'owntracks',
+        deviceName: kDeviceName,
+        recorderUrl: kDefaultRecorderUrl,
+        recorderUsername: '',
+        recorderPassword: '',
+        caPem: kServerCaPem,
+        allowUntrustedCertificates: false,
+        trackingMode: c.trackingMode,
+      );
+    }
+    // The leader's own server: the group's shared login, and your username
+    // as the device, so everyone is owntracks/<login>/<username>.
+    return s.copyWith(
+      host: c.host,
+      port: c.port,
+      useTls: c.tls,
+      useWebSocket: false,
+      username: c.username,
+      password: c.password,
+      baseTopic: c.topicPrefix,
+      deviceName: s.username,
+      recorderUrl: c.recorderUrl,
+      recorderUsername: '',
+      recorderPassword: '',
+      caPem: c.ca,
+      allowUntrustedCertificates: false,
+      trackingMode: c.trackingMode,
+    );
+  }
+
+  /// Whether someone on the current server belongs on your map.
+  bool _allowed(String user, String device) {
+    final c = connection;
+    if (c == null) return false;
+    if (onOwnServer) return user == c.username;
+    final g = activeGroup;
+    return user == _settings.username || g == null || g.hasMember(user);
+  }
+
+  String? _accountNameFor(Person p) {
+    if (isMe(p)) return _account?.name;
+    final g = activeGroup;
+    if (g == null) return null;
+    return onOwnServer ? g.memberName(p.device) : g.memberName(p.user);
+  }
 
   Person? personByTopic(String topic) => _people[topic];
 
@@ -103,6 +177,9 @@ class AppState extends ChangeNotifier {
     }
     _myFace = await _store.loadFace();
     _clientSuffix = await _store.clientIdSuffix();
+    // Last known groups, so the phone can connect before the server answers.
+    final cached = _settings.hasAccount ? await _store.loadAccount() : null;
+    if (cached != null) _account = Account.fromJson(cached);
     _googleMaps = await MapAvailability.googleMapsAvailable();
 
     mqtt.onConnected = _onConnected;
@@ -114,15 +191,62 @@ class AppState extends ChangeNotifier {
     notifyListeners();
 
     if (_settings.setupComplete && _settings.hasAccount) {
-      unawaited(_goOnline());
+      unawaited(_applyConnection(force: true));
       _startPolling();
     }
   }
 
-  Future<void> _goOnline() async {
-    await mqtt.connect(_settings, clientId: clientId);
-    if (_settings.sharingLocation) {
-      await location.start(_settings.trackingMode);
+  String? _appliedKey;
+  TrackingMode? _trackingApplied;
+  bool _trackingKnown = false;
+
+  static String _keyOf(AppSettings? c) => c == null
+      ? 'none'
+      : [
+          c.host,
+          c.port,
+          c.useTls,
+          c.username,
+          c.password,
+          c.baseTopic,
+          c.deviceName,
+          c.caPem.hashCode,
+          c.keepAliveSeconds,
+        ].join('|');
+
+  /// Connects to the active group's server, or disconnects when there's
+  /// none. Does nothing if that's already the case, apart from picking up
+  /// a new tracking mode.
+  Future<void> _applyConnection({bool force = false}) async {
+    if (!_settings.setupComplete) return;
+    final c = connection;
+    final key = _keyOf(c);
+    if (!force && key == _appliedKey) {
+      await _applyTracking();
+      return;
+    }
+    _appliedKey = key;
+    _people.clear();
+    notifyListeners();
+    if (c == null) {
+      await mqtt.disconnect();
+    } else {
+      await mqtt.connect(c, clientId: clientId);
+    }
+    await _applyTracking(force: true);
+  }
+
+  /// Tracking follows the active group's mode (set by its leader).
+  Future<void> _applyTracking({bool force = false}) async {
+    final c = connection;
+    final want = c != null && _settings.sharingLocation ? c.trackingMode : null;
+    if (!force && _trackingKnown && want == _trackingApplied) return;
+    _trackingKnown = true;
+    _trackingApplied = want;
+    if (want == null) {
+      await location.stop();
+    } else {
+      await location.start(want);
     }
   }
 
@@ -180,41 +304,19 @@ class AppState extends ChangeNotifier {
 
     if (!next.setupComplete) return;
 
-    final connectionChanged =
-        reconnect ||
-        prev.host != next.host ||
-        prev.port != next.port ||
-        prev.useTls != next.useTls ||
-        prev.useWebSocket != next.useWebSocket ||
-        prev.username != next.username ||
-        prev.password != next.password ||
-        prev.deviceName != next.deviceName ||
-        prev.baseTopic != next.baseTopic ||
-        prev.keepAliveSeconds != next.keepAliveSeconds ||
-        prev.allowUntrustedCertificates != next.allowUntrustedCertificates;
-
-    if (connectionChanged) {
-      if (prev.deviceName != next.deviceName) {
-        _people.remove(prev.ownTopic);
-      }
-      await _goOnline();
-      return;
-    }
+    // Server and tracking come from the active group; this reconnects only
+    // if they changed (or when asked to).
+    await _applyConnection(force: reconnect);
 
     if (prev.displayName != next.displayName ||
         prev.trackerId != next.trackerId) {
       _publishCard();
     }
-
-    if (prev.sharingLocation != next.sharingLocation ||
-        prev.trackingMode != next.trackingMode) {
-      if (next.sharingLocation) {
-        await location.start(next.trackingMode);
-      } else {
-        await location.stop();
-      }
-    }
   }
+
+  /// Use another of your groups' settings (and see its people).
+  Future<void> setActiveGroup(Group g) =>
+      updateSettings(_settings.copyWith(activeGroupId: g.id));
 
   Future<void> completeSetup() async {
     await updateSettings(
@@ -234,6 +336,8 @@ class AppState extends ChangeNotifier {
     _cards.clear();
     _account = null;
     _accountError = null;
+    _appliedKey = null;
+    _trackingKnown = false;
     _myFace = null;
     _settings = const AppSettings();
     notifyListeners();
@@ -282,15 +386,21 @@ class AppState extends ChangeNotifier {
   void _setAccount(Account a) {
     final before = {...?_account?.visible.keys, ...?_account?.requesters};
     _account = a;
-    // Drop anyone you no longer share a group with.
-    _people.removeWhere((_, p) => !isMe(p) && !a.visible.containsKey(p.user));
+    unawaited(_store.saveAccount(a.json));
+    // Drop anyone who isn't in the active group any more.
+    _people.removeWhere((_, p) => !isMe(p) && !_allowed(p.user, p.device));
     for (final p in _people.values) {
-      p.accountName = isMe(p) ? a.name : a.visible[p.user];
+      p.accountName = _accountNameFor(p);
     }
+    notifyListeners();
     // Someone new: subscribe again so the broker sends their last position.
     final now = {...a.visible.keys, ...a.requesters};
-    if (now.any((u) => !before.contains(u))) mqtt.refreshPeople();
-    notifyListeners();
+    final someoneNew = now.any((u) => !before.contains(u));
+    unawaited(
+      _applyConnection().then((_) {
+        if (someoneNew) mqtt.refreshPeople();
+      }),
+    );
   }
 
   /// Runs a group action and applies the server's answer. Returns an error
@@ -323,6 +433,33 @@ class AppState extends ChangeNotifier {
   Future<String?> makeLeader(Group g, String username) =>
       _act(() => accounts.makeLeader(_settings, g.id, username));
 
+  /// Leader: how often everyone in the group reports their location.
+  Future<String?> setGroupTracking(Group g, TrackingMode mode) => _act(
+    () => accounts.setConfig(_settings, g.id, {'tracking_mode': mode.name}),
+  );
+
+  /// Leader: put the group on your own server (members get it automatically).
+  Future<String?> setGroupServer(Group g, GroupConfig c) =>
+      _act(() => accounts.setConfig(_settings, g.id, c.toServerJson()));
+
+  /// Checks a group server's details by logging in, before saving them.
+  Future<ConnectionTestResult> testGroupServer(GroupConfig c) =>
+      MqttService.test(
+        _settings.copyWith(
+          host: c.host,
+          port: c.port,
+          useTls: c.tls,
+          useWebSocket: false,
+          username: c.username,
+          password: c.password,
+          baseTopic: c.topicPrefix,
+          deviceName: _settings.username,
+          caPem: c.ca,
+          allowUntrustedCertificates: false,
+        ),
+        clientId: '$clientId-test',
+      );
+
   /// Deletes your account on the server, then signs out.
   Future<String?> deleteAccount() async {
     try {
@@ -346,19 +483,19 @@ class AppState extends ChangeNotifier {
   }
 
   void _publishCard() {
-    if (_settings.deviceName.isEmpty) return;
+    if (connection == null) return;
     final name = _settings.displayName.isNotEmpty
         ? _settings.displayName
-        : _settings.deviceName;
+        : _settings.username;
     final payload = OwnTracksProtocol.encodeCard(
       name: name,
       trackerId: _settings.trackerId,
       face: _myFace,
     );
-    mqtt.publish('${_settings.ownTopic}/info', payload);
+    mqtt.publish('$_ownTopic/info', payload);
 
     // Reflect it locally straight away.
-    final me = _ensurePerson(_settings.ownTopic);
+    final me = _ensurePerson(_ownTopic);
     if (me != null) {
       me.cardName = name;
       me.face = _myFace;
@@ -370,7 +507,7 @@ class AppState extends ChangeNotifier {
   // ------------------------------------------------------------- location ---
 
   void _publishFix(DeviceFix f) {
-    if (!_settings.sharingLocation || _settings.deviceName.isEmpty) return;
+    if (!_settings.sharingLocation || connection == null) return;
     final pos = f.position;
     final payload = OwnTracksProtocol.encodeLocation(
       lat: pos.latitude,
@@ -385,10 +522,10 @@ class AppState extends ChangeNotifier {
       charging: f.charging,
       trigger: f.trigger,
     );
-    mqtt.publish(_settings.ownTopic, payload);
+    mqtt.publish(_ownTopic, payload);
 
     // Update our own dot even if we're offline.
-    final me = _ensurePerson(_settings.ownTopic);
+    final me = _ensurePerson(_ownTopic);
     if (me != null) {
       me.trackerId = _settings.trackerId;
       me.last = LocationFix(
@@ -419,7 +556,7 @@ class AppState extends ChangeNotifier {
 
   Future<List<LocationFix>> history(Person p, DateTime from, DateTime to) {
     return _recorder.history(
-      _settings,
+      connection ?? _settings,
       user: p.user,
       device: p.device,
       from: from,
@@ -427,34 +564,19 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  /// Used by setup to check the Recorder address before saving it.
-  Future<String?> testRecorder(AppSettings candidate) async {
-    try {
-      await _recorder.history(
-        candidate,
-        user: candidate.username,
-        device: candidate.deviceName.isEmpty ? 'test' : candidate.deviceName,
-        from: DateTime.now().subtract(const Duration(hours: 1)),
-      );
-      return null;
-    } on RecorderException catch (e) {
-      return e.message;
-    }
-  }
-
   // ------------------------------------------------------------- incoming ---
 
   void _onMessage(IncomingMessage m) {
     final parts = OwnTracksProtocol.parseTopic(
       m.topic,
-      baseTopic: _settings.baseTopic,
+      baseTopic: (connection ?? _settings).baseTopic,
     );
     if (parts == null) return;
 
     final json = OwnTracksProtocol.decode(m.payload);
 
     if (parts.subtopic == 'cmd') {
-      if (parts.deviceTopic == _settings.ownTopic &&
+      if (parts.deviceTopic == _ownTopic &&
           json != null &&
           OwnTracksProtocol.isReportLocationCommand(json) &&
           _settings.sharingLocation) {
@@ -471,9 +593,11 @@ class AppState extends ChangeNotifier {
       return;
     }
 
+    final mine = parts.deviceTopic == _ownTopic;
     if (parts.subtopic == null) {
       final fix = OwnTracksProtocol.parseLocation(json);
       if (fix == null) return;
+      if (!mine && !_allowed(parts.user, parts.device)) return;
       final p = _ensurePerson(parts.deviceTopic, parts: parts)!;
       if (p.last == null || !fix.timestamp.isBefore(p.last!.timestamp)) {
         p.last = fix;
@@ -486,11 +610,8 @@ class AppState extends ChangeNotifier {
       final card = OwnTracksProtocol.parseCard(json);
       if (card == null) return;
       _cards[parts.user] = card;
-      final a = _account;
-      if (a != null &&
-          parts.deviceTopic != _settings.ownTopic &&
-          !a.visible.containsKey(parts.user)) {
-        notifyListeners(); // someone asking to join: card only, not on the map
+      if (!mine && !_allowed(parts.user, parts.device)) {
+        notifyListeners(); // e.g. someone asking to join: card only, no pin
         return;
       }
       final p = _ensurePerson(parts.deviceTopic, parts: parts)!;
@@ -507,14 +628,16 @@ class AppState extends ChangeNotifier {
     if (existing != null) return existing;
     parts ??= OwnTracksProtocol.parseTopic(
       topic,
-      baseTopic: _settings.baseTopic,
+      baseTopic: (connection ?? _settings).baseTopic,
     );
     if (parts == null) return null;
-    return _people[topic] = Person(
+    final p = _people[topic] = Person(
       topic: topic,
       user: parts.user,
       device: parts.device,
-    )..accountName = _account?.visible[parts.user];
+    );
+    p.accountName = _accountNameFor(p);
+    return p;
   }
 
   @override
