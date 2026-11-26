@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/person.dart';
+import '../services/account_service.dart';
 import '../services/mqtt_service.dart';
 import '../services/platform_services.dart';
 import '../state/app_state.dart';
@@ -16,6 +17,7 @@ import '../widgets/family_map.dart';
 import 'groups_screen.dart';
 import 'history_screen.dart';
 import 'settings_screen.dart';
+import '../strings.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -73,6 +75,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  String? _shownInvite;
+
+  /// An invite link opened the app: show Groups, where it's filled in.
+  void _openInvite(String? link) {
+    if (link == null || link == _shownInvite) return;
+    _shownInvite = link;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _openGroups(context);
+    });
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -111,6 +124,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    _openInvite(app.pendingInvite);
     final people = app.people;
     final selected = _selected == null ? null : app.personByTopic(_selected!);
     final media = MediaQuery.of(context);
@@ -151,11 +165,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _StatusChip(
                   status: app.mqtt.status.value,
                   error: app.mqtt.lastError.value,
+                  groups: app.account?.groups ?? const [],
+                  active: app.activeGroup,
+                  onPick: app.setActiveGroup,
                 ),
                 const Spacer(),
                 _RoundButton(
                   icon: Icons.settings_rounded,
-                  tooltip: 'Settings',
+                  tooltip: Txt.settings2,
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const SettingsScreen()),
                   ),
@@ -177,7 +194,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   children: [
                     _RoundButton(
                       icon: Icons.groups_rounded,
-                      tooltip: 'Show everyone',
+                      tooltip: Txt.showEveryone,
                       onTap: () {
                         _clearSelection();
                         _fitEveryone(people);
@@ -186,7 +203,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     const SizedBox(height: 10),
                     _RoundButton(
                       icon: Icons.my_location_rounded,
-                      tooltip: 'Me',
+                      tooltip: Txt.me,
                       onTap: () {
                         final me = people.where(app.isMe).firstOrNull;
                         if (me != null && me.hasLocation) {
@@ -302,18 +319,81 @@ class _RoundButton extends StatelessWidget {
 }
 
 class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.status, this.error});
+  const _StatusChip({
+    required this.status,
+    this.error,
+    this.groups = const [],
+    this.active,
+    this.onPick,
+  });
   final ConnectionStatus status;
   final String? error;
+
+  /// With more than one group, tapping the chip switches which one you see.
+  final List<Group> groups;
+  final Group? active;
+  final ValueChanged<Group>? onPick;
+
+  bool get _switchable => groups.length > 1 && onPick != null;
+
+  void _showError(BuildContext context) =>
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error!)));
+
+  Future<void> _openMenu(BuildContext context) async {
+    final box = context.findRenderObject()! as RenderBox;
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final at = box.localToGlobal(
+      Offset(0, box.size.height + 6),
+      ancestor: overlay,
+    );
+    final picked = await showMenu<Object>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        at.dx,
+        at.dy,
+        overlay.size.width - at.dx,
+        0,
+      ),
+      items: [
+        PopupMenuItem<Object>(
+          enabled: false,
+          height: 32,
+          child: Text(Txt.showGroup),
+        ),
+        for (final g in groups)
+          PopupMenuItem<Object>(
+            value: g,
+            child: Row(
+              children: [
+                Expanded(child: Text(g.name)),
+                if (g.id == active?.id) const Icon(Icons.check_rounded),
+              ],
+            ),
+          ),
+        if (error != null)
+          PopupMenuItem<Object>(
+            value: 'error',
+            child: Text(
+              error!,
+              style: const TextStyle(color: FlockColors.danger),
+            ),
+          ),
+      ],
+    );
+    if (!context.mounted) return;
+    if (picked is Group) onPick!(picked);
+  }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final (color, label) = switch (status) {
-      ConnectionStatus.connected => (FlockColors.online, 'Live'),
-      ConnectionStatus.connecting => (FlockColors.warning, 'Connecting…'),
-      ConnectionStatus.disconnected => (Colors.grey, 'Offline'),
-      ConnectionStatus.error => (FlockColors.danger, 'Can\'t connect'),
+      ConnectionStatus.connected => (FlockColors.online, Txt.live),
+      ConnectionStatus.connecting => (FlockColors.warning, Txt.connecting),
+      ConnectionStatus.disconnected => (Colors.grey, Txt.offline),
+      ConnectionStatus.error => (FlockColors.danger, Txt.canTConnect),
     };
     return Material(
       color: cs.surface,
@@ -322,11 +402,11 @@ class _StatusChip extends StatelessWidget {
       borderRadius: BorderRadius.circular(24),
       child: InkWell(
         borderRadius: BorderRadius.circular(24),
-        onTap: error == null
+        onTap: _switchable
+            ? () => _openMenu(context)
+            : error == null
             ? null
-            : () =>
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text(error!))),
+            : () => _showError(context),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
@@ -337,7 +417,16 @@ class _StatusChip extends StatelessWidget {
                 active: status == ConnectionStatus.connected,
               ),
               const SizedBox(width: 8),
-              Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text(
+                _switchable && active != null
+                    ? Txt.liveIn(label, active!.name)
+                    : label,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (_switchable) ...[
+                const SizedBox(width: 2),
+                const Icon(Icons.arrow_drop_down_rounded, size: 22),
+              ],
             ],
           ),
         ),
@@ -436,7 +525,7 @@ class _PeopleList extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
           child: Row(
             children: [
-              Text('People', style: t.titleLarge),
+              Text(Txt.people, style: t.titleLarge),
               const SizedBox(width: 8),
               if (people.isNotEmpty)
                 Container(
@@ -464,7 +553,7 @@ class _PeopleList extends StatelessWidget {
                 child: TextButton.icon(
                   onPressed: () => _openGroups(context),
                   icon: const Icon(Icons.groups_rounded),
-                  label: const Text('Groups'),
+                  label: const Text(Txt.groups),
                 ),
               ),
             ],
@@ -473,16 +562,14 @@ class _PeopleList extends StatelessWidget {
         if (!app.settings.sharingLocation)
           const _Banner(
             icon: Icons.location_off_rounded,
-            text: 'You\'re not sharing your location. Turn it on in Settings.',
+            text: Txt.youReNotSharingYour,
           ),
         if (app.activeGroup case final g? when g.config == null)
           _Banner(
             icon: Icons.dns_rounded,
             text: g.isLeader
-                ? 'Add a server for ${g.name} so everyone can share their '
-                      'location.'
-                : '${g.name} isn\'t set up yet. ${g.leaderName} needs to add '
-                      'a server.',
+                ? Txt.addAServerForSo(g.name)
+                : Txt.isnTSetUpYet(g.name, g.leaderName),
             onTap: () => _openGroups(context),
           ),
         if (account != null)
@@ -491,15 +578,15 @@ class _PeopleList extends StatelessWidget {
               _Banner(
                 icon: Icons.person_add_alt_1_rounded,
                 text: g.requests.length == 1
-                    ? '${g.requests.first.name} wants to join ${g.name}.'
-                    : '${g.requests.length} people want to join ${g.name}.',
+                    ? Txt.wantsToJoin(g.requests.first.name, g.name)
+                    : Txt.peopleWantToJoin2(g.requests.length, g.name),
                 onTap: () => _openGroups(context),
               ),
         if (account != null)
           for (final p in account.pending)
             _Banner(
               icon: Icons.hourglass_top_rounded,
-              text: 'Waiting for ${p.leaderName} to let you into ${p.name}.',
+              text: Txt.waitingForToLetYou2(p.leaderName, p.name),
               onTap: () => _openGroups(context),
             ),
         for (final p in people)
@@ -545,11 +632,7 @@ class _EmptyPeople extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    inGroup
-                        ? 'No one else here yet. Share your group\'s code from '
-                              'Groups so your friends can ask to join.'
-                        : 'You\'re not in a group yet. Start one, or enter a '
-                              'code someone sent you, in Groups.',
+                    inGroup ? Txt.noOneElseHereYet : Txt.youReNotInA2,
                   ),
                 ),
                 Icon(Icons.chevron_right_rounded, color: cs.primary),
@@ -653,7 +736,7 @@ class _PersonRow extends StatelessWidget {
                   const SizedBox(height: 2),
                   if (fix == null)
                     Text(
-                      'No location yet',
+                      Txt.noLocationYet,
                       style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                     )
                   else
@@ -783,7 +866,7 @@ class _PersonDetail extends StatelessWidget {
               IconButton(
                 onPressed: onBack,
                 icon: const Icon(Icons.arrow_back_rounded),
-                tooltip: 'Back to everyone',
+                tooltip: Txt.backToEveryone,
               ),
               Avatar.person(person, size: 56, enlargeable: true),
               const SizedBox(width: 14),
@@ -792,7 +875,7 @@ class _PersonDetail extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      isMe ? '${person.name} (you)' : person.name,
+                      isMe ? Txt.nameYou(person.name) : person.name,
                       style: t.titleLarge,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -839,7 +922,7 @@ class _PersonDetail extends StatelessWidget {
                             Icons.directions_car_rounded,
                             size: 16,
                           ),
-                          label: Text('${fix.velocityKmh!.round()} km/h'),
+                          label: Text(Txt.kmH(fix.velocityKmh!.round())),
                           visualDensity: VisualDensity.compact,
                         ),
                       ),
@@ -854,7 +937,7 @@ class _PersonDetail extends StatelessWidget {
             children: [
               _ActionButton(
                 icon: Icons.refresh_rounded,
-                label: isMe ? 'Update' : 'Refresh',
+                label: isMe ? Txt.update : Txt.refresh,
                 onTap: () {
                   final ok = app.requestUpdate(person);
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -862,9 +945,9 @@ class _PersonDetail extends StatelessWidget {
                       content: Text(
                         ok
                             ? (isMe
-                                  ? 'Sending your location…'
-                                  : 'Asked ${person.name}\'s phone for an update.')
-                            : 'You\'re offline right now.',
+                                  ? Txt.sendingYourLocation
+                                  : Txt.askedSPhoneForAn(person.name))
+                            : Txt.youReOfflineRightNow,
                       ),
                     ),
                   );
@@ -873,7 +956,7 @@ class _PersonDetail extends StatelessWidget {
               const SizedBox(width: 10),
               _ActionButton(
                 icon: Icons.directions_rounded,
-                label: 'Directions',
+                label: Txt.directions,
                 onTap: fix == null
                     ? null
                     : () => launchUrl(
@@ -884,7 +967,7 @@ class _PersonDetail extends StatelessWidget {
               const SizedBox(width: 10),
               _ActionButton(
                 icon: Icons.history_rounded,
-                label: 'History',
+                label: Txt.history,
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => HistoryScreen(person: person),

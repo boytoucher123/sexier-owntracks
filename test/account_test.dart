@@ -14,14 +14,41 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+/// A throwaway CA made for these tests, and its fingerprint (same as the
+/// server's `ca_fingerprint`).
+const testCa = '''-----BEGIN CERTIFICATE-----
+MIIBhTCCASugAwIBAgIUNI0gAFAHvvaNCmcE9xbABLn939cwCgYIKoZIzj0EAwIw
+GDEWMBQGA1UEAwwNRmxvY2sgVGVzdCBDQTAeFw0yNjExMjYwOTA5MzJaFw0zNjEx
+MjMwOTA5MzJaMBgxFjAUBgNVBAMMDUZsb2NrIFRlc3QgQ0EwWTATBgcqhkjOPQIB
+BggqhkjOPQMBBwNCAATCvdWQzoTu8CWyiiw4sd9nv4E/e4SC/OOu5B9gRG8XsDhW
+mzqgXni8Uz08hffy/viDdzmcHRy0zTDDlBDllJtHo1MwUTAdBgNVHQ4EFgQUsGF3
+tV+Jd5mWnYHwsl7arT4qEHMwHwYDVR0jBBgwFoAUsGF3tV+Jd5mWnYHwsl7arT4q
+EHMwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiBO5ftRUisnysgq
+Kio8znxxOgS+FQZ9EDfQ5sG0hethlQIhAK5xjd3X7tKGdY8sbngcYieyZ1Nk8MMT
+vx9Wm7ryimu2
+-----END CERTIFICATE-----
+''';
+const testCaFp = '5B9fXa80mdzLAlW9nF7SSQeA5oixRK7JvVXaN_k_mLo';
+const standardConfig = {
+  'standard': true,
+  'tracking_mode': 'balanced',
+  'host': 'flock.example.net',
+  'port': 8883,
+  'tls': true,
+  'ca': testCa,
+  'recorder_url': 'https://flock.example.net:8443',
+  'topic_prefix': 'owntracks',
+};
+const inviteMessage =
+    'Join "Class of 2024" on Flock. Install Flock, then paste this whole '
+    'message when it asks for an invite:\n\n'
+    'flock://flock.example.net:8443/join/K7Q-2MX?ca=$testCaFp';
+
 /// What the server's GET /me looks like for a leader with one request.
 Map<String, dynamic> meJson({
   List<String> visible = const ['jack-lee'],
   List<String> requests = const ['zoe-obrien'],
-  Map<String, dynamic>? config = const {
-    'standard': true,
-    'tracking_mode': 'balanced',
-  },
+  Map<String, dynamic>? config = standardConfig,
 }) => {
   'username': 'maya-chen',
   'name': 'Maya Chen',
@@ -107,10 +134,27 @@ class _Location extends LocationService {
 class _Accounts extends AccountService {
   Map<String, dynamic> response = meJson();
   String? signedUpAs;
+  String? signedUpAt;
+  final joins = <(String, String)>[]; // (username, code)
+  bool knowsExistingLogin = true;
+
   @override
-  Future<NewAccount> signUp(String name) async {
+  Future<String> trustFor(Invite invite) async => testCa;
+
+  @override
+  Future<NewAccount> signUp(AppSettings at, String name) async {
     signedUpAs = name;
+    signedUpAt = at.accountServer;
     return NewAccount(username: 'maya-chen', password: 'pw' * 12, name: name);
+  }
+
+  @override
+  Future<Account> join(AppSettings s, String code) async {
+    if (s.username != 'maya-chen' && !knowsExistingLogin) {
+      throw AccountException('Your login wasn\'t accepted.', status: 401);
+    }
+    joins.add((s.username, code));
+    return Account.fromJson(response);
   }
 
   @override
@@ -147,7 +191,6 @@ void main() {
     test('signs up without a login, then uses the account\'s login', () async {
       final seen = <http.BaseRequest>[];
       final svc = AccountService(
-        baseUrl: 'https://server/flock/api',
         client: MockClient((req) async {
           seen.add(req);
           if (req.url.path.endsWith('/signup')) {
@@ -164,12 +207,17 @@ void main() {
           return http.Response(jsonEncode(meJson()), 200);
         }),
       );
-      final acct = await svc.signUp('Maya Chen');
+      const at = AppSettings(accountServer: 'flock.example.net:8443');
+      final acct = await svc.signUp(at, 'Maya Chen');
       expect((acct.username, acct.password), ('maya-chen', 'secret'));
       expect(seen.first.headers.containsKey('Authorization'), isFalse);
+      expect(
+        seen.first.url.toString(),
+        'https://flock.example.net:8443/flock/api/signup',
+      );
 
       final me = await svc.me(
-        const AppSettings(username: 'maya-chen', password: 'secret'),
+        at.copyWith(username: 'maya-chen', password: 'secret'),
       );
       expect(me.name, 'Maya Chen');
       expect(
@@ -180,7 +228,6 @@ void main() {
 
     test('shows the server\'s own message, and flags a bad login', () async {
       final svc = AccountService(
-        baseUrl: 'https://server/flock/api',
         client: MockClient((req) async {
           if (req.url.path.endsWith('/join')) {
             return http.Response(
@@ -191,7 +238,7 @@ void main() {
           return http.Response(jsonEncode({'error': 'Please sign in.'}), 401);
         }),
       );
-      const s = AppSettings(username: 'u', password: 'p');
+      const s = AppSettings(username: 'u', password: 'p', accountServer: 'x');
       await expectLater(
         svc.join(s, 'AAA-AAA'),
         throwsA(
@@ -210,11 +257,10 @@ void main() {
 
     test('no connection gives a plain message', () async {
       final svc = AccountService(
-        baseUrl: 'https://server/flock/api',
         client: MockClient((_) async => throw const SocketExceptionLike()),
       );
       await expectLater(
-        svc.signUp('X'),
+        svc.signUp(const AppSettings(accountServer: 'x'), 'X'),
         throwsA(
           isA<AccountException>().having(
             (e) => e.message,
@@ -223,6 +269,55 @@ void main() {
           ),
         ),
       );
+    });
+  });
+
+  group('invites', () {
+    test('found anywhere in a pasted message', () {
+      final i = Invite.parse(inviteMessage)!;
+      expect(
+        (i.server, i.code, i.caFingerprint),
+        ('flock.example.net:8443', 'K7Q-2MX', testCaFp),
+      );
+      expect(Invite.parse('K7Q-2MX'), isNull);
+      expect(
+        Invite.parse('flock://host.example/join/ABCDEF')!.caFingerprint,
+        isNull,
+      ); // a server with a public certificate
+    });
+
+    test('the web form of the link works too', () {
+      final i = Invite.parse(
+        'https://flock.example.net:8443/flock/join/K7Q-2MX?ca=$testCaFp',
+      )!;
+      expect(
+        (i.server, i.code, i.caFingerprint),
+        ('flock.example.net:8443', 'K7Q-2MX', testCaFp),
+      );
+    });
+
+    test('the fingerprint matches the server\'s', () {
+      expect(caFingerprint(testCa), testCaFp);
+    });
+
+    test('the server\'s certificate is only trusted if it matches', () async {
+      final good = AccountService(
+        client: MockClient(
+          (req) async => http.Response(jsonEncode({'pem': testCa}), 200),
+        ),
+      );
+      final i = Invite.parse(inviteMessage)!;
+      expect(await good.trustFor(i), testCa);
+
+      final impostor = AccountService(
+        client: MockClient(
+          (req) async => http.Response(
+            jsonEncode({'pem': testCa.replaceFirst('MIIB', 'MIIC')}),
+            200,
+          ),
+        ),
+      );
+      await expectLater(impostor.trustFor(i), throwsA(isA<AccountException>()));
     });
   });
 
@@ -245,21 +340,73 @@ void main() {
       await app.init();
     });
 
-    test('making an account saves the login and publishes as /phone', () async {
-      final err = await app.createAccount('  Maya Chen ');
-      expect(err, isNull);
-      expect(accounts.signedUpAs, 'Maya Chen');
-      expect(store.s.username, 'maya-chen');
-      expect(store.s.password, isNotEmpty);
-      expect(store.s.ownTopic, 'owntracks/maya-chen/phone');
-      expect(store.s.displayName, 'Maya Chen');
-      expect(store.s.trackerId, 'MC');
-      expect(app.account?.groups.single.name, 'Class of 2024');
+    test('the app knows no server until an invite', () {
+      expect(const AppSettings().host, '');
+      expect(const AppSettings().recorderUrl, '');
+      expect(const AppSettings().caPem, '');
+      expect(app.connection, isNull);
     });
 
-    test('a phone on the old shared login goes back through setup', () async {
+    test(
+      'an invite makes the account on its server, then asks to join',
+      () async {
+        await app.updateSettings(
+          app.settings.copyWith(displayName: ' Maya Chen '),
+        );
+        final err = await app.joinWithInvite(inviteMessage);
+        expect(err, isNull);
+        expect(accounts.signedUpAs, 'Maya Chen');
+        expect(accounts.signedUpAt, 'flock.example.net:8443');
+        expect(accounts.joins.single, ('maya-chen', 'K7Q-2MX'));
+        expect(store.s.accountServer, 'flock.example.net:8443');
+        expect(store.s.accountCa, testCa);
+        expect(store.s.username, 'maya-chen');
+        expect(store.s.trackerId, 'MC');
+        expect(app.account?.groups.single.name, 'Class of 2024');
+      },
+    );
+
+    test('a link that opens the app is filled in, then used up', () async {
+      app.offerInvite('https://example.com/not-an-invite');
+      expect(app.pendingInvite, isNull);
+      const link = 'flock://flock.example.net:8443/join/K7Q-2MX?ca=$testCaFp';
+      app.offerInvite(link);
+      expect(app.pendingInvite, link);
+      await app.updateSettings(app.settings.copyWith(displayName: 'Maya Chen'));
+      expect(await app.joinWithInvite(app.pendingInvite!), isNull);
+      expect(app.pendingInvite, isNull);
+    });
+
+    test('not an invite: a plain message', () async {
+      final err = await app.joinWithInvite('K7Q-2MX');
+      expect(err, contains('isn\'t an invite'));
+      expect(accounts.joins, isEmpty);
+    });
+
+    test('a login from before is reused on the invite\'s server', () async {
       store.s = const AppSettings(
-        username: 'class_of_2024',
+        username: 'george-gunter',
+        password: 'old-pw',
+        displayName: 'George',
+        setupComplete: true,
+      );
+      final legacy = AppState(
+        store: store,
+        mqtt: mqtt,
+        location: _Location(),
+        accounts: accounts,
+      );
+      await legacy.init();
+      expect(legacy.settings.setupComplete, isFalse); // no server: set up again
+      expect(await legacy.joinWithInvite(inviteMessage), isNull);
+      expect(accounts.signedUpAs, isNull); // no new account
+      expect(accounts.joins.single, ('george-gunter', 'K7Q-2MX'));
+      expect(store.s.accountServer, 'flock.example.net:8443');
+    });
+
+    test('a phone with no server goes back through setup', () async {
+      store.s = const AppSettings(
+        username: 'someone',
         password: 'old',
         displayName: 'Maya Chen',
         setupComplete: true,
@@ -276,7 +423,8 @@ void main() {
     });
 
     test('only group members are people; requesters are just a card', () async {
-      await app.createAccount('Maya Chen');
+      await app.updateSettings(app.settings.copyWith(displayName: 'Maya Chen'));
+      await app.joinWithInvite(inviteMessage);
       await Future<void>.delayed(Duration.zero);
       mqtt.inject('owntracks/jack-lee/phone', _loc(-33.87, 151.2));
       mqtt.inject(
@@ -318,6 +466,7 @@ void main() {
           username: 'maya-chen',
           password: 'mine',
           displayName: 'Maya Chen',
+          accountServer: 'flock.example.net:8443',
           setupComplete: true,
         );
       mqtt = _Mqtt();
@@ -335,11 +484,11 @@ void main() {
     }
 
     test('a standard group uses this server with your own login', () async {
-      await boot({'standard': true, 'tracking_mode': 'precise'});
+      await boot({...standardConfig, 'tracking_mode': 'precise'});
       final c = app.connection!;
       expect(
         (c.host, c.port, c.username, c.password),
-        ('owntracks-class-of-2024.duckdns.org', 8883, 'maya-chen', 'mine'),
+        ('flock.example.net', 8883, 'maya-chen', 'mine'),
       );
       expect(c.ownTopic, 'owntracks/maya-chen/phone');
       expect(mqtt.connects.last.username, 'maya-chen');
@@ -390,10 +539,10 @@ void main() {
     test(
       'the leader changing tracking switches it without reconnecting',
       () async {
-        await boot({'standard': true, 'tracking_mode': 'balanced'});
+        await boot(standardConfig);
         final connects = mqtt.connects.length;
         accounts.response = meJson(
-          config: {'standard': true, 'tracking_mode': 'precise'},
+          config: {...standardConfig, 'tracking_mode': 'precise'},
         );
         await app.refreshAccount();
         await Future<void>.delayed(Duration.zero);
@@ -401,6 +550,81 @@ void main() {
         expect(mqtt.connects.length, connects);
       },
     );
+
+    test('your own tracking level beats the group default', () async {
+      await boot(standardConfig); // group default: balanced
+      await app.setMyTracking(TrackingMode.batterySaver);
+      expect(loc.modes.last, TrackingMode.batterySaver);
+      expect(store.s.myTracking, TrackingMode.batterySaver); // remembered
+
+      // The leader changes the default: you keep yours.
+      accounts.response = meJson(
+        config: {...standardConfig, 'tracking_mode': 'precise'},
+      );
+      await app.refreshAccount();
+      await Future<void>.delayed(Duration.zero);
+      expect(loc.modes.last, TrackingMode.batterySaver);
+
+      // Back to the group's default.
+      await app.setMyTracking(null);
+      expect(store.s.myTracking, isNull);
+      expect(loc.modes.last, TrackingMode.precise);
+    });
+
+    test('switching groups on the same server swaps who you see', () async {
+      store = _Store()
+        ..s = const AppSettings(
+          username: 'maya-chen',
+          password: 'mine',
+          displayName: 'Maya Chen',
+          accountServer: 'flock.example.net:8443',
+          setupComplete: true,
+        );
+      mqtt = _Mqtt();
+      loc = _Location();
+      final two = meJson(visible: const ['jack-lee']);
+      (two['groups'] as List).add({
+        'id': 8,
+        'name': 'Test',
+        'leader': 'maya-chen',
+        'role': 'leader',
+        'code': 'MEA-TAY',
+        'config': standardConfig,
+        'members': [
+          {'username': 'maya-chen', 'name': 'Maya Chen', 'leader': true},
+          {'username': 'sam-o', 'name': 'Sam O'},
+        ],
+        'requests': const [],
+      });
+      (two['visible'] as List).add({'username': 'sam-o', 'name': 'Sam O'});
+      accounts = _Accounts()..response = two;
+      app = AppState(
+        store: store,
+        mqtt: mqtt,
+        location: loc,
+        accounts: accounts,
+      );
+      await app.init();
+      await app.refreshAccount();
+      await Future<void>.delayed(Duration.zero);
+
+      mqtt.inject('owntracks/jack-lee/phone', _loc(-33.87, 151.2));
+      mqtt.inject('owntracks/sam-o/phone', _loc(-33.88, 151.2));
+      await Future<void>.delayed(Duration.zero);
+      expect(app.activeGroup!.name, 'Class of 2024');
+      expect(app.people.map((p) => p.user), ['jack-lee']);
+
+      final connects = mqtt.connects.length;
+      final refreshes = mqtt.refreshes;
+      await app.setActiveGroup(app.account!.groups.last);
+      expect(app.activeGroup!.name, 'Test');
+      expect(app.people.map((p) => p.user), isNot(contains('jack-lee')));
+      expect(mqtt.connects.length, connects); // same server: no reconnect
+      expect(mqtt.refreshes, refreshes + 1); // asks again for Test's people
+      mqtt.inject('owntracks/sam-o/phone', _loc(-33.88, 151.2));
+      await Future<void>.delayed(Duration.zero);
+      expect(app.people.map((p) => p.user), ['sam-o']);
+    });
   });
 }
 

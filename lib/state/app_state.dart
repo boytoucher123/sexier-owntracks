@@ -14,6 +14,7 @@ import '../services/owntracks_protocol.dart';
 import '../services/platform_services.dart';
 import '../services/recorder_service.dart';
 import '../services/settings_store.dart';
+import '../strings.dart';
 
 /// The single source of truth the UI listens to.
 class AppState extends ChangeNotifier {
@@ -110,19 +111,22 @@ class AppState extends ChangeNotifier {
     final c = activeGroup?.config;
     if (c == null) return null;
     if (c.standard) {
+      // The group runs on the server your account is on: its details come
+      // from the server, and you use your own login.
+      if (c.host.isEmpty) return null;
       return s.copyWith(
-        host: kDefaultHost,
-        port: kDefaultPort,
-        useTls: true,
+        host: c.host,
+        port: c.port,
+        useTls: c.tls,
         useWebSocket: false,
-        baseTopic: 'owntracks',
+        baseTopic: c.topicPrefix,
         deviceName: kDeviceName,
-        recorderUrl: kDefaultRecorderUrl,
+        recorderUrl: c.recorderUrl,
         recorderUsername: '',
         recorderPassword: '',
-        caPem: kServerCaPem,
+        caPem: c.ca,
         allowUntrustedCertificates: false,
-        trackingMode: c.trackingMode,
+        trackingMode: s.myTracking ?? c.trackingMode,
       );
     }
     // The leader's own server: the group's shared login, and your username
@@ -141,7 +145,7 @@ class AppState extends ChangeNotifier {
       recorderPassword: '',
       caPem: c.ca,
       allowUntrustedCertificates: false,
-      trackingMode: c.trackingMode,
+      trackingMode: s.myTracking ?? c.trackingMode,
     );
   }
 
@@ -236,7 +240,7 @@ class AppState extends ChangeNotifier {
     await _applyTracking(force: true);
   }
 
-  /// Tracking follows the active group's mode (set by its leader).
+  /// Tracking: your own choice, else the active group's default.
   Future<void> _applyTracking({bool force = false}) async {
     final c = connection;
     final want = c != null && _settings.sharingLocation ? c.trackingMode : null;
@@ -314,9 +318,38 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// An invite link that opened the app, waiting to be used in the join form.
+  String? pendingInvite;
+
+  /// Called when a `flock://…/join/…` (or https invite) link opens the app.
+  void offerInvite(String link) {
+    if (Invite.parse(link) == null) return;
+    pendingInvite = link;
+    notifyListeners();
+  }
+
   /// Use another of your groups' settings (and see its people).
-  Future<void> setActiveGroup(Group g) =>
-      updateSettings(_settings.copyWith(activeGroupId: g.id));
+  Future<void> setActiveGroup(Group g) async {
+    if (g.id == activeGroup?.id) return;
+    await updateSettings(_settings.copyWith(activeGroupId: g.id));
+    // Same server: the connection stays up, so swap whose map this is.
+    _people.removeWhere((_, p) => !isMe(p) && !_allowed(p.user, p.device));
+    for (final p in _people.values) {
+      p.accountName = _accountNameFor(p);
+    }
+    notifyListeners();
+    mqtt.refreshPeople();
+  }
+
+  /// Your own tracking level; null goes back to the group's default.
+  Future<void> setMyTracking(TrackingMode? mode) => updateSettings(
+    mode == null
+        ? _settings.copyWith(groupDefaultTracking: true)
+        : _settings.copyWith(myTracking: mode),
+  );
+
+  /// The default the active group's leader picked.
+  TrackingMode? get groupTracking => activeGroup?.config?.trackingMode;
 
   Future<void> completeSetup() async {
     await updateSettings(
@@ -345,15 +378,43 @@ class AppState extends ChangeNotifier {
 
   // -------------------------------------------------------------- account ---
 
-  /// Makes your own login on the server from your name. Returns an error
-  /// message, or null when it worked.
-  Future<String?> createAccount(String name) async {
+  /// Joins a group from an invite (pasted text containing
+  /// `flock://host:port/join/CODE?ca=…`). The first time, this is also how
+  /// the app learns about the server and makes your account there, from
+  /// your name. A bare code works for a group on the server you're already
+  /// on. Returns an error message, or null when it worked.
+  Future<String?> joinWithInvite(String text) async {
+    final invite = Invite.parse(text);
+    if (invite == null) {
+      final code = text.trim();
+      if (_settings.hasAccount &&
+          RegExp(r'^[A-Za-z0-9]{3}-?[A-Za-z0-9]{3}$').hasMatch(code)) {
+        return joinGroup(code);
+      }
+      return Txt.thatIsnTAnInvite;
+    }
+    if (_settings.hasAccount && _settings.accountServer != invite.server) {
+      return Txt.thisInviteIsForA;
+    }
     try {
-      final a = await accounts.signUp(name.trim());
-      _people.clear();
-      _cards.clear();
-      await updateSettings(
-        _settings.copyWith(
+      final ca = _settings.hasAccount
+          ? _settings.accountCa
+          : await accounts.trustFor(invite);
+      var at = _settings.copyWith(accountServer: invite.server, accountCa: ca);
+      Account? joined;
+      if (at.username.isNotEmpty && at.password.isNotEmpty) {
+        // A login from before (or this server's already): try it first.
+        try {
+          joined = await accounts.join(at, invite.code);
+        } on AccountException catch (e) {
+          if (!e.unauthorized) rethrow;
+        }
+      }
+      if (joined == null) {
+        final name = _settings.displayName.trim();
+        if (name.isEmpty) return Txt.enterYourNameFirst;
+        final a = await accounts.signUp(at, name);
+        at = at.copyWith(
           username: a.username,
           password: a.password,
           deviceName: kDeviceName,
@@ -361,11 +422,19 @@ class AppState extends ChangeNotifier {
           trackerId: _settings.trackerId.isEmpty
               ? trackerIdFromDisplayName(a.name)
               : null,
-        ),
-        reconnect: true,
-      );
+        );
+        _people.clear();
+        _cards.clear();
+        _account = null;
+        joined = await accounts.join(at, invite.code);
+      }
+      await updateSettings(at);
+      _setAccount(joined);
       if (_settings.setupComplete) _startPolling();
-      await refreshAccount();
+      if (pendingInvite != null) {
+        pendingInvite = null;
+        notifyListeners();
+      }
       return null;
     } on AccountException catch (e) {
       return e.message;

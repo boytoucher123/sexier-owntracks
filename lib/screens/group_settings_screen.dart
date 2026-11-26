@@ -7,6 +7,7 @@ import '../services/account_service.dart';
 import '../services/mqtt_service.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
+import '../strings.dart';
 
 /// Leader only: the group's server and how often everyone reports.
 /// Members get these automatically; they never see a server setting.
@@ -102,20 +103,17 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Move to your own server?'),
-          content: const Text(
-            'Everyone in the group switches to your server. You can\'t move '
-            'back to this app\'s server afterwards.',
-          ),
+          title: const Text(Txt.moveToYourOwnServer),
+          content: const Text(Txt.everyoneInTheGroupSwitches),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
+              child: const Text(Txt.cancel),
             ),
             FilledButton(
               style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Move'),
+              child: const Text(Txt.move),
             ),
           ],
         ),
@@ -134,9 +132,7 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
     });
     if (err == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Saved. Everyone in the group gets it automatically.'),
-        ),
+        const SnackBar(content: Text(Txt.savedEveryoneInTheGroup)),
       );
     }
   }
@@ -151,19 +147,18 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
     final mode = config?.trackingMode ?? TrackingMode.balanced;
 
     return Scaffold(
-      appBar: AppBar(title: Text('${g.name} settings')),
+      appBar: AppBar(title: Text(Txt.settings(g.name))),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: [
           Text(
-            'Everyone in ${g.name} gets these settings automatically. They '
-            'don\'t have to set anything up.',
+            Txt.everyoneInGetsTheseSettings(g.name),
             style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
           const SizedBox(height: 24),
 
           // ---- Tracking
-          Text('Tracking', style: t.titleMedium),
+          Text(Txt.tracking, style: t.titleMedium),
           const SizedBox(height: 8),
           SegmentedButton<TrackingMode>(
             segments: [
@@ -178,13 +173,13 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            config == null ? 'Set up the server first.' : mode.description,
+            config == null ? Txt.setUpTheServerFirst : mode.description,
             style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
           ),
           const SizedBox(height: 28),
 
           // ---- Server
-          Text('Server', style: t.titleMedium),
+          Text(Txt.server, style: t.titleMedium),
           const SizedBox(height: 8),
           if (config?.standard == true && !_editingServer) ...[
             Card(
@@ -195,19 +190,14 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                   children: [
                     Icon(Icons.verified_rounded, color: FlockColors.online),
                     SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Runs on this app\'s server. Everyone uses their own '
-                        'login, and history is included. Nothing to set up.',
-                      ),
-                    ),
+                    Expanded(child: Text(Txt.runsOnThisAppS)),
                   ],
                 ),
               ),
             ),
             TextButton(
               onPressed: () => setState(() => _editingServer = true),
-              child: const Text('Use your own server instead'),
+              child: const Text(Txt.useYourOwnServerInstead),
             ),
           ] else ...[
             if (config == null)
@@ -215,34 +205,32 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                 color: FlockColors.warning.withOpacity(0.12),
                 child: const Padding(
                   padding: EdgeInsets.all(16),
-                  child: Text(
-                    'New groups bring their own server: an MQTT broker '
-                    '(like Mosquitto) that everyone\'s phone can reach. The '
-                    'whole group shares the one login below; the app keeps '
-                    'people apart by name. Until you add it, nobody in the '
-                    'group can share their location.',
-                  ),
+                  child: Text(Txt.newGroupsBringTheirOwn),
                 ),
               ),
             const SizedBox(height: 12),
             _field(
               _host,
-              'Server address',
-              hint: 'e.g. mqtt.example.com',
+              Txt.serverAddress,
+              hint: Txt.eGMqttExampleCom,
               icon: Icons.dns_rounded,
               keyboard: TextInputType.url,
             ),
             Row(
               children: [
                 Expanded(
-                  child: _field(_port, 'Port', keyboard: TextInputType.number),
+                  child: _field(
+                    _port,
+                    Txt.port,
+                    keyboard: TextInputType.number,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   flex: 2,
                   child: SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Secure (TLS)'),
+                    title: const Text(Txt.secureTls),
                     value: _tls,
                     onChanged: (v) => setState(() {
                       _tls = v;
@@ -252,31 +240,29 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                 ),
               ],
             ),
-            _field(_user, 'Group login: username', icon: Icons.person_rounded),
+            _field(_user, Txt.groupLoginUsername, icon: Icons.person_rounded),
             _field(
               _pass,
-              'Group login: password',
+              Txt.groupLoginPassword,
               icon: Icons.key_rounded,
               obscure: true,
             ),
             _field(
               _history,
-              'History address (optional)',
-              hint: 'https://… of an OwnTracks Recorder',
+              Txt.historyAddressOptional,
+              hint: Txt.historyAddressHint,
               icon: Icons.timeline_rounded,
               keyboard: TextInputType.url,
             ),
             ExpansionTile(
               tilePadding: EdgeInsets.zero,
-              title: const Text('More options'),
+              title: const Text(Txt.moreOptions),
               children: [
-                _field(_prefix, 'Topic prefix'),
+                _field(_prefix, Txt.topicPrefix),
                 _field(
                   _ca,
-                  'Server certificate (CA, optional)',
-                  hint:
-                      'Paste the PEM if your server uses its own certificate '
-                      'authority',
+                  Txt.serverCertificateCaOptional,
+                  hint: Txt.pasteThePemIfYour,
                   lines: 5,
                 ),
               ],
@@ -320,7 +306,7 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                       onPressed: _ready && !_testing
                           ? () => _runTest(app, mode)
                           : null,
-                      child: Text(_testing ? 'Testing…' : 'Test connection'),
+                      child: Text(_testing ? Txt.testing : Txt.testConnection),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -332,7 +318,7 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                       onPressed: _ready && !_saving
                           ? () => _save(app, g, mode)
                           : null,
-                      child: Text(_saving ? 'Saving…' : 'Save'),
+                      child: Text(_saving ? Txt.saving : Txt.save),
                     ),
                   ),
                 ],

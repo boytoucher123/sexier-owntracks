@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../strings.dart';
+
 /// A sideways joystick for moving through history.
 ///
 /// Push the knob left (earlier) or right (later): the further you push,
@@ -57,8 +59,8 @@ class _HistoryJoystickState extends State<HistoryJoystick> {
         _travel = (w - HistoryJoystick.knob) / 2 - 4;
         final push = _value.abs();
         return Semantics(
-          label: 'History joystick',
-          hint: 'Drag left for earlier, right for later',
+          label: Txt.historyJoystick,
+          hint: Txt.dragLeftForEarlierRight,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onHorizontalDragStart: (_) {
@@ -103,7 +105,7 @@ class _HistoryJoystickState extends State<HistoryJoystick> {
                     left: 14,
                     child: _Hint(
                       icon: Icons.fast_rewind_rounded,
-                      text: 'Earlier',
+                      text: Txt.earlier,
                       active: _value < 0,
                       color: color,
                     ),
@@ -112,7 +114,7 @@ class _HistoryJoystickState extends State<HistoryJoystick> {
                     right: 14,
                     child: _Hint(
                       icon: Icons.fast_forward_rounded,
-                      text: 'Later',
+                      text: Txt.later,
                       active: _value > 0,
                       color: color,
                       iconAfter: true,

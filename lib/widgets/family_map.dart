@@ -13,6 +13,7 @@ import '../models/settings.dart';
 import '../theme.dart';
 import '../util/format.dart';
 import 'avatar.dart';
+import '../strings.dart';
 
 /// CARTO API key, passed at build time with
 /// `--dart-define=CARTO_API_KEY=...` (the release workflow reads it from the
@@ -331,13 +332,9 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
           alignment: fm.AttributionAlignment.bottomLeft,
           showFlutterMapAttribution: false,
           attributions: style == MapStyle.satellite
-              ? [
-                  fm.TextSourceAttribution(
-                    'Esri, Maxar, Earthstar Geographics, and the GIS User Community',
-                  ),
-                ]
+              ? [fm.TextSourceAttribution(Txt.esriMaxarEarthstarGeographicsAnd)]
               : [
-                  fm.TextSourceAttribution('OpenStreetMap contributors'),
+                  fm.TextSourceAttribution(Txt.openstreetmapContributors),
                   fm.TextSourceAttribution('CARTO'),
                 ],
         ),

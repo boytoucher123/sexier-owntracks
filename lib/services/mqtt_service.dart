@@ -8,6 +8,7 @@ import 'package:mqtt_client/mqtt_server_client.dart';
 import '../config/server_config.dart';
 import '../models/settings.dart';
 import 'owntracks_protocol.dart';
+import '../strings.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected, error }
 
@@ -21,7 +22,7 @@ class IncomingMessage {
 class ConnectionTestResult {
   const ConnectionTestResult.ok()
     : success = true,
-      message = 'Connected! Everything looks good.',
+      message = Txt.connectedEverythingLooksGood,
       suggestion = null,
       suggestionLabel = null;
   const ConnectionTestResult.fail(this.message)
@@ -84,16 +85,14 @@ class MqttService {
       final r = await test(alt, clientId: clientId, timeoutMs: 6000);
       if (r.success) {
         return ConnectionTestResult.suggest(
-          '${first.message}\n\nBut it does work with $label.',
+          Txt.butItDoesWorkWith(first.message, label),
           suggestion: alt,
           suggestionLabel: label,
         );
       }
       if (r.message.contains('username or password')) {
         // Reached the server this way; the login is what's wrong.
-        return ConnectionTestResult.fail(
-          'Found your server ($label), but it rejected the username or password.',
-        );
+        return ConnectionTestResult.fail(Txt.foundYourServerButIt(label));
       }
     }
     return first;
@@ -126,12 +125,12 @@ class MqttService {
     if (s.useTls && !s.allowUntrustedCertificates) {
       add(
         s.copyWith(allowUntrustedCertificates: true),
-        'a self-signed certificate allowed',
+        Txt.aSelfSignedCertificateAllowed,
       );
     }
     add(
       base.copyWith(port: 8883, useTls: true, useWebSocket: false),
-      'secure connection on port 8883',
+      Txt.secureConnectionOnPort8883,
     );
     add(
       base.copyWith(
@@ -140,7 +139,7 @@ class MqttService {
         useWebSocket: false,
         allowUntrustedCertificates: true,
       ),
-      'secure connection on port 8883 with a self-signed certificate',
+      Txt.secureConnectionOnPort88832,
     );
     add(
       base.copyWith(
@@ -149,7 +148,7 @@ class MqttService {
         useWebSocket: false,
         allowUntrustedCertificates: false,
       ),
-      'port 1883 without a secure connection',
+      Txt.port1883WithoutASecure,
     );
     add(
       base.copyWith(
@@ -159,7 +158,7 @@ class MqttService {
         useWebSocket: true,
         allowUntrustedCertificates: false,
       ),
-      'WebSockets on port 443',
+      Txt.websocketsOnPort443,
     );
     return out;
   }
@@ -424,15 +423,15 @@ class MqttService {
     switch (code) {
       case MqttConnectReturnCode.badUsernameOrPassword:
       case MqttConnectReturnCode.notAuthorized:
-        return 'The server rejected the username or password.';
+        return Txt.theServerRejectedTheUsername;
       case MqttConnectReturnCode.identifierRejected:
-        return 'The server rejected this phone\'s ID. Try changing your name slightly.';
+        return Txt.theServerRejectedThisPhone;
       case MqttConnectReturnCode.brokerUnavailable:
-        return 'The server is up but not accepting connections right now.';
+        return Txt.theServerIsUpBut;
       case MqttConnectReturnCode.unacceptedProtocolVersion:
-        return 'The server doesn\'t speak a compatible MQTT version.';
+        return Txt.theServerDoesnTSpeak;
       default:
-        return 'Couldn\'t connect to ${s.host}:${s.port}.';
+        return Txt.couldnTConnectTo(s.host, s.port);
     }
   }
 
@@ -443,9 +442,9 @@ class MqttService {
           m.contains('password') ||
           m.contains('not authorized') ||
           m.contains('badusername')) {
-        return 'The server rejected the username or password.';
+        return Txt.theServerRejectedTheUsername;
       }
-      return 'The server at ${s.host}:${s.port} didn\'t answer. Check the address and port.';
+      return Txt.theServerAtDidnT(s.host, s.port);
     }
     if (e is HandshakeException || e is TlsException) {
       final m = e.toString().toUpperCase();
@@ -453,18 +452,13 @@ class MqttService {
           m.contains('SELF_SIGNED') ||
           m.contains('UNABLE_TO_GET_ISSUER') ||
           m.contains('CERTIFICATE')) {
-        if ((m.contains('HOSTNAME MISMATCH') ||
-                m.contains('IP ADDRESS MISMATCH')) &&
-            s.host.trim().toLowerCase() != kDefaultHost) {
-          return 'The server\'s security certificate is for a different '
-              'address. Use $kDefaultHost as the server address.';
+        if (m.contains('HOSTNAME MISMATCH') ||
+            m.contains('IP ADDRESS MISMATCH')) {
+          return Txt.theServerSSecurityCertificate;
         }
-        return 'The server\'s security certificate isn\'t trusted by this phone '
-            '(it\'s probably self-signed). Turn on "Allow self-signed certificate" '
-            'under More options.';
+        return Txt.theServerSSecurityCertificate2;
       }
-      return 'A secure connection couldn\'t be set up. If your server doesn\'t use TLS on '
-          'port ${s.port}, turn "Secure connection" off.';
+      return Txt.aSecureConnectionCouldnT(s.port);
     }
     if (e is SocketException) {
       final m = e.message.toLowerCase();
@@ -473,22 +467,22 @@ class MqttService {
           os.contains('no address') ||
           os.contains('nodename') ||
           os.contains('name or service')) {
-        return 'Couldn\'t find a server called "${s.host}". Check the spelling.';
+        return Txt.couldnTFindAServer(s.host);
       }
       if (os.contains('refused')) {
-        return 'Found the server, but nothing is listening on port ${s.port}. Check the port.';
+        return Txt.foundTheServerButNothing(s.port);
       }
       if (os.contains('network is unreachable')) {
-        return 'This phone looks offline. Check your internet connection.';
+        return Txt.thisPhoneLooksOfflineCheck;
       }
       if (m.contains('timed out') || os.contains('timed out')) {
-        return 'The server took too long to answer. Check the address and port.';
+        return Txt.theServerTookTooLong;
       }
-      return 'Couldn\'t reach ${s.host}:${s.port}.';
+      return Txt.couldnTReach(s.host, s.port);
     }
     if (e is TimeoutException) {
-      return 'The server took too long to answer. Check the address and port.';
+      return Txt.theServerTookTooLong;
     }
-    return 'Something went wrong connecting: $e';
+    return Txt.somethingWentWrongConnecting(e);
   }
 }

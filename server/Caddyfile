@@ -18,7 +18,7 @@
 	}
 	header -Server
 
-	handle /flock/api/* {
+	handle /flock/* {
 		reverse_proxy 127.0.0.1:8091
 	}
 

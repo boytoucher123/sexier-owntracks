@@ -1,4 +1,5 @@
 // ignore_for_file: deprecated_member_use
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -7,12 +8,19 @@ import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
+import 'strings.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   final app = AppState();
   await app.init();
+  // Invite links (flock://host/join/CODE) open the app with the invite
+  // filled in. This also delivers the link the app was launched with.
+  AppLinks().uriLinkStream.listen(
+    (uri) => app.offerInvite(uri.toString()),
+    onError: (_) {},
+  );
   runApp(FlockApp(state: app));
 }
 
@@ -30,7 +38,7 @@ class FlockApp extends StatelessWidget {
     return ChangeNotifierProvider.value(
       value: state,
       child: MaterialApp(
-        title: 'Flock',
+        title: Txt.flock,
         debugShowCheckedModeBanner: false,
         theme: buildTheme(Brightness.light),
         darkTheme: buildTheme(Brightness.dark),

@@ -1,18 +1,20 @@
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../strings.dart';
+
 /// "Just now", "4 min ago", "2 h ago", "Yesterday 18:04", "Mon 09:12".
 String timeAgo(DateTime t, {DateTime? now}) {
   final n = now ?? DateTime.now();
   final d = n.difference(t);
-  if (d.inSeconds < 60) return 'Just now';
-  if (d.inMinutes < 60) return '${d.inMinutes} min ago';
-  if (d.inHours < 12) return '${d.inHours} h ago';
+  if (d.inSeconds < 60) return Txt.justNow;
+  if (d.inMinutes < 60) return Txt.minAgo(d.inMinutes);
+  if (d.inHours < 12) return Txt.hAgo(d.inHours);
   final today = DateTime(n.year, n.month, n.day);
   final day = DateTime(t.year, t.month, t.day);
   final hm = DateFormat.Hm().format(t);
-  if (day == today) return 'Today $hm';
-  if (day == today.subtract(const Duration(days: 1))) return 'Yesterday $hm';
+  if (day == today) return Txt.today(hm);
+  if (day == today.subtract(const Duration(days: 1))) return Txt.yesterday(hm);
   if (today.difference(day).inDays < 7) {
     return '${DateFormat.E().format(t)} $hm';
   }
@@ -25,16 +27,16 @@ bool isStale(DateTime t, {DateTime? now}) =>
 
 String formatDistance(double meters) {
   if (meters < 1000) return '${meters.round()} m';
-  if (meters < 10000) return '${(meters / 1000).toStringAsFixed(1)} km';
-  return '${(meters / 1000).round()} km';
+  if (meters < 10000) return Txt.km((meters / 1000).toStringAsFixed(1));
+  return Txt.km((meters / 1000).round());
 }
 
 String formatDuration(Duration d) {
-  if (d.inMinutes < 1) return '<1 min';
-  if (d.inMinutes < 60) return '${d.inMinutes} min';
+  if (d.inMinutes < 1) return Txt.n1Min;
+  if (d.inMinutes < 60) return Txt.min(d.inMinutes);
   final h = d.inHours;
   final m = d.inMinutes % 60;
-  return m == 0 ? '$h h' : '$h h $m min';
+  return m == 0 ? '$h h' : Txt.hMin(h, m);
 }
 
 const _distance = Distance();
@@ -46,7 +48,7 @@ String dayLabel(DateTime day, {DateTime? now}) {
   final n = now ?? DateTime.now();
   final today = DateTime(n.year, n.month, n.day);
   final d = DateTime(day.year, day.month, day.day);
-  if (d == today) return 'Today';
-  if (d == today.subtract(const Duration(days: 1))) return 'Yesterday';
+  if (d == today) return Txt.today2;
+  if (d == today.subtract(const Duration(days: 1))) return Txt.yesterday2;
   return DateFormat('EEE d').format(d);
 }

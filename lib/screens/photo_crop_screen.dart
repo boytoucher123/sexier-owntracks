@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 
+import '../strings.dart';
+
 /// Shows a picked photo large, lets the person drag and pinch it inside a
 /// circle, and returns the chosen square as JPEG bytes (or null on cancel).
 class PhotoCropScreen extends StatefulWidget {
@@ -95,12 +97,12 @@ class _PhotoCropScreenState extends State<PhotoCropScreen> {
           fontSize: 18,
           fontWeight: FontWeight.w600,
         ),
-        title: const Text('Move and scale'),
+        title: const Text(Txt.moveAndScale),
         actions: [
           TextButton(
             onPressed: photo == null || _saving ? null : _done,
             style: TextButton.styleFrom(foregroundColor: Colors.white),
-            child: const Text('Use photo'),
+            child: const Text(Txt.usePhoto),
           ),
         ],
       ),
@@ -108,7 +110,7 @@ class _PhotoCropScreenState extends State<PhotoCropScreen> {
         child: _failed
             ? const Center(
                 child: Text(
-                  'That photo couldn\'t be opened. Try another one.',
+                  Txt.thatPhotoCouldnTBe,
                   style: TextStyle(color: Colors.white),
                 ),
               )
@@ -153,7 +155,7 @@ class _PhotoCropScreenState extends State<PhotoCropScreen> {
                       ),
                       const SizedBox(height: 20),
                       const Text(
-                        'Drag to move. Pinch to zoom.',
+                        Txt.dragToMovePinchTo,
                         style: TextStyle(color: Colors.white70),
                       ),
                       const Spacer(),

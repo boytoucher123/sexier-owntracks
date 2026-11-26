@@ -8,6 +8,7 @@ import '../config/server_config.dart';
 import '../models/person.dart';
 import '../models/settings.dart';
 import 'owntracks_protocol.dart';
+import '../strings.dart';
 
 class RecorderException implements Exception {
   RecorderException(this.message);
@@ -40,7 +41,7 @@ class RecorderService {
     DateTime? to,
   }) async {
     if (!s.hasRecorder) {
-      throw RecorderException('Location history isn\'t set up yet.');
+      throw RecorderException(Txt.locationHistoryIsnTSet);
     }
     final uri = buildLocationsUri(
       s.recorderUrl,
@@ -65,27 +66,19 @@ class RecorderService {
           .get(uri, headers: headers)
           .timeout(const Duration(seconds: 20));
     } on Object {
-      throw RecorderException(
-        'Couldn\'t reach the history server. Check your connection.',
-      );
+      throw RecorderException(Txt.couldnTReachTheHistory);
     }
     if (res.statusCode == 401) {
-      throw RecorderException('The history server rejected the login.');
+      throw RecorderException(Txt.theHistoryServerRejectedThe);
     }
     if (res.statusCode == 403) {
-      throw RecorderException(
-        'You can only see history for people in your groups.',
-      );
+      throw RecorderException(Txt.youCanOnlySeeHistory);
     }
     if (res.statusCode == 404) {
-      throw RecorderException(
-        'The history server address looks wrong (got "not found").',
-      );
+      throw RecorderException(Txt.theHistoryServerAddressLooks);
     }
     if (res.statusCode != 200) {
-      throw RecorderException(
-        'The history server had a problem (error ${res.statusCode}).',
-      );
+      throw RecorderException(Txt.theHistoryServerHadA(res.statusCode));
     }
     return parseLocationsResponse(res.body);
   }
@@ -123,7 +116,7 @@ class RecorderService {
     try {
       decoded = jsonDecode(body);
     } on FormatException {
-      throw RecorderException('The history server sent something unexpected.');
+      throw RecorderException(Txt.theHistoryServerSentSomething);
     }
     final List<dynamic> items;
     if (decoded is List) {

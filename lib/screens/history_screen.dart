@@ -18,6 +18,7 @@ import '../util/timeline.dart';
 import '../widgets/avatar.dart';
 import '../widgets/family_map.dart';
 import '../widgets/history_joystick.dart';
+import '../strings.dart';
 
 /// Points per second for a joystick push of 0..1. Gentle near the centre
 /// (about one point a second, for following a street) and fast at the edge
@@ -242,7 +243,7 @@ class _HistoryScreenState extends State<HistoryScreen>
                 children: [
                   Text(p.name, overflow: TextOverflow.ellipsis),
                   Text(
-                    'Daily history',
+                    Txt.dailyHistory,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -294,7 +295,7 @@ class _HistoryScreenState extends State<HistoryScreen>
                 icon: _error != null
                     ? Icons.cloud_off_rounded
                     : Icons.nightlight_round,
-                text: _error ?? 'No locations recorded on this day.',
+                text: _error ?? Txt.noLocationsRecordedOnThis,
               ),
             ),
           Positioned(
@@ -348,7 +349,7 @@ class _DayBar extends StatelessWidget {
               children: [
                 IconButton(
                   onPressed: onEarlier,
-                  tooltip: 'Earlier day',
+                  tooltip: Txt.earlierDay,
                   icon: const Icon(Icons.chevron_left_rounded, size: 30),
                 ),
                 Expanded(
@@ -361,7 +362,7 @@ class _DayBar extends StatelessWidget {
                 ),
                 IconButton(
                   onPressed: onLater,
-                  tooltip: 'Later day',
+                  tooltip: Txt.laterDay,
                   icon: const Icon(Icons.chevron_right_rounded, size: 30),
                 ),
               ],
@@ -426,7 +427,7 @@ class _Panel extends StatelessWidget {
                 if (cur != null && (cur.velocityKmh ?? 0) >= 8)
                   _Pill(
                     icon: Icons.speed_rounded,
-                    text: '${cur.velocityKmh!.round()} km/h',
+                    text: Txt.kmH(cur.velocityKmh!.round()),
                     color: color,
                   ),
                 if (cur?.battery != null) ...[
@@ -513,7 +514,7 @@ class _Address extends StatelessWidget {
         s.connectionState == ConnectionState.done
             ? (s.data ??
                   '${fix.lat.toStringAsFixed(5)}, ${fix.lon.toStringAsFixed(5)}')
-            : 'Finding address…',
+            : Txt.findingAddress,
       ),
     );
   }

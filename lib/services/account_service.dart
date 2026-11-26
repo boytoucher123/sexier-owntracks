@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
 import '../config/server_config.dart';
 import '../models/settings.dart';
+import '../strings.dart';
 
 class AccountException implements Exception {
   AccountException(this.message, {this.status});
@@ -127,6 +129,7 @@ class Group {
     this.code,
     this.requests = const [],
     this.config,
+    this.invite,
   });
   final int id;
   final String name;
@@ -140,6 +143,9 @@ class Group {
 
   /// Null until the leader sets the group up (a server to use).
   final GroupConfig? config;
+
+  /// What the leader shares: `flock://host:port/join/CODE?ca=…`.
+  final String? invite;
 
   bool hasMember(String username) => members.any((m) => m.username == username);
 
@@ -214,6 +220,7 @@ class Account {
             leader: g['leader'] as String? ?? '',
             isLeader: g['role'] == 'leader',
             code: g['code'] as String?,
+            invite: g['invite'] as String?,
             config: g['config'] is Map
                 ? GroupConfig.fromJson(Map<String, dynamic>.from(g['config']))
                 : null,
@@ -253,18 +260,96 @@ class Account {
   }
 }
 
-/// Talks to the server's account service (sign-up, groups, approvals) over
-/// HTTPS, trusting the server's private CA like MQTT does.
+/// What an invite says: where the group's Flock server is, the group code,
+/// and the fingerprint of the server's certificate authority (when it uses
+/// its own). Shared as `https://host:port/flock/join/CODE?ca=FINGERPRINT`
+/// (tappable in chats; its page opens Flock with `flock://host:port/join/…`).
+/// [parse] finds either anywhere in pasted text.
+class Invite {
+  const Invite({required this.server, required this.code, this.caFingerprint});
+  final String server;
+  final String code;
+  final String? caFingerprint;
+
+  static final _re = RegExp(
+    r'(?:flock://|https://)([A-Za-z0-9.\-]+(?::\d{1,5})?)/(?:flock/)?join/'
+    r'([A-Za-z0-9\-]{4,12})(?:\?ca=([A-Za-z0-9_\-]{43}))?',
+  );
+
+  /// Accepts the shared https link, the flock:// link it opens, or a message
+  /// containing either.
+  static Invite? parse(String text) {
+    final m = _re.firstMatch(text);
+    if (m == null) return null;
+    return Invite(
+      server: m.group(1)!.toLowerCase(),
+      code: m.group(2)!,
+      caFingerprint: m.group(3),
+    );
+  }
+}
+
+/// SHA-256 of a PEM certificate's DER bytes, base64url without padding
+/// (the same as the server's `ca_fingerprint`).
+String caFingerprint(String pem) {
+  final body = pem
+      .split('\n')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty && !l.startsWith('-----'))
+      .join();
+  final digest = sha256.convert(base64Decode(body));
+  return base64Url.encode(digest.bytes).replaceAll('=', '');
+}
+
+/// Talks to a server's account service (sign-up, groups, approvals) over
+/// HTTPS. The server comes from your invite; there is none built in.
 class AccountService {
-  AccountService({http.Client? client, String baseUrl = kAccountApiUrl})
-    : _http = client ?? IOClient(HttpClient(context: serverSecurityContext())),
-      _base = baseUrl;
+  AccountService({http.Client? client}) : _injected = client;
 
-  final http.Client _http;
-  final String _base;
+  final http.Client? _injected;
+  final Map<String, http.Client> _clients = {};
 
-  Future<NewAccount> signUp(String name) async {
-    final j = await _call('POST', '/signup', body: {'name': name});
+  http.Client _clientFor(AppSettings s) =>
+      _injected ??
+      _clients.putIfAbsent(
+        s.accountCa,
+        () => IOClient(HttpClient(context: serverSecurityContext(s.accountCa))),
+      );
+
+  /// Gets the server's certificate authority for an invite and checks it
+  /// against the invite's fingerprint, so a stranger can't stand in for the
+  /// server. Returns '' for a server with a normal public certificate.
+  Future<String> trustFor(Invite invite) async {
+    final fp = invite.caFingerprint;
+    if (fp == null) return '';
+    String pem;
+    try {
+      final http.Response res;
+      if (_injected != null) {
+        res = await _injected.get(
+          Uri.parse('https://${invite.server}/flock/api/ca'),
+        );
+      } else {
+        // Can't check the certificate yet: we're fetching what to check it
+        // against. The fingerprint check below is what makes this safe.
+        final hc = HttpClient()..badCertificateCallback = (_, _, _) => true;
+        res = await IOClient(hc)
+            .get(Uri.parse('https://${invite.server}/flock/api/ca'));
+        hc.close();
+      }
+      pem = (jsonDecode(res.body) as Map)['pem'] as String;
+    } on Object {
+      throw AccountException(Txt.couldnTReachTheServer);
+    }
+    if (caFingerprint(pem) != fp) {
+      throw AccountException(Txt.thisInviteDoesnTMatch);
+    }
+    return pem;
+  }
+
+  /// Makes your account on the server in [at] (its accountServer/accountCa).
+  Future<NewAccount> signUp(AppSettings at, String name) async {
+    final j = await _call('POST', '/signup', at: at, body: {'name': name});
     return NewAccount(
       username: j['username'] as String,
       password: j['password'] as String,
@@ -351,9 +436,14 @@ class AccountService {
     String method,
     String path, {
     AppSettings? login,
+    AppSettings? at,
     Map<String, Object?>? body,
   }) async {
-    final req = http.Request(method, Uri.parse('$_base$path'));
+    final server = (login ?? at)!;
+    final req = http.Request(
+      method,
+      Uri.parse('https://${server.accountServer}/flock/api$path'),
+    );
     req.headers['Accept'] = 'application/json';
     if (login != null) {
       req.headers['Authorization'] =
@@ -366,12 +456,10 @@ class AccountService {
     final http.Response res;
     try {
       res = await http.Response.fromStream(
-        await _http.send(req).timeout(const Duration(seconds: 20)),
+        await _clientFor(server).send(req).timeout(const Duration(seconds: 20)),
       );
     } on Object {
-      throw AccountException(
-        'Couldn\'t reach the server. Check your connection and try again.',
-      );
+      throw AccountException(Txt.couldnTReachTheServer2);
     }
     Map<String, dynamic> j = const {};
     if (res.body.isNotEmpty) {
@@ -385,7 +473,7 @@ class AccountService {
     if (res.statusCode >= 200 && res.statusCode < 300) return j;
     final msg = j['error'] is String
         ? j['error'] as String
-        : 'The server had a problem (error ${res.statusCode}).';
+        : Txt.theServerHadAProblem(res.statusCode);
     throw AccountException(msg, status: res.statusCode);
   }
 }

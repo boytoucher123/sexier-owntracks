@@ -1,9 +1,11 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../models/settings.dart';
+import '../services/account_service.dart';
 import '../services/mqtt_service.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
@@ -12,6 +14,7 @@ import '../widgets/family_map.dart';
 import 'group_settings_screen.dart';
 import 'groups_screen.dart';
 import 'photo_crop_screen.dart';
+import '../strings.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -23,7 +26,7 @@ class SettingsScreen extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: const Text(Txt.settings2)),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
         children: [
@@ -52,7 +55,7 @@ class SettingsScreen extends StatelessWidget {
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                           Text(
-                            'Edit name and photo',
+                            Txt.editNameAndPhoto,
                             style: TextStyle(
                               color: cs.primary,
                               fontWeight: FontWeight.w600,
@@ -71,7 +74,7 @@ class SettingsScreen extends StatelessWidget {
 
           // ---- Groups
           _Section(
-            'Groups',
+            Txt.groups,
             children: [
               ListTile(
                 leading: Badge(
@@ -79,7 +82,7 @@ class SettingsScreen extends StatelessWidget {
                   label: Text('${app.account?.waitingRequests ?? 0}'),
                   child: const Icon(Icons.groups_rounded),
                 ),
-                title: const Text('Your groups'),
+                title: const Text(Txt.yourGroups),
                 subtitle: Text(_groupsSummary(app)),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () => Navigator.of(
@@ -91,7 +94,7 @@ class SettingsScreen extends StatelessWidget {
 
           // ---- Sharing
           _Section(
-            'Location sharing',
+            Txt.locationSharing,
             children: [
               SwitchListTile(
                 secondary: Icon(
@@ -100,11 +103,11 @@ class SettingsScreen extends StatelessWidget {
                       : Icons.location_off_rounded,
                   color: s.sharingLocation ? FlockColors.online : null,
                 ),
-                title: const Text('Share my location'),
+                title: const Text(Txt.shareMyLocation),
                 subtitle: Text(
                   s.sharingLocation
-                      ? 'Your friends can see where you are'
-                      : 'Paused: friends see your last spot',
+                      ? Txt.yourFriendsCanSeeWhere
+                      : Txt.pausedFriendsSeeYourLast,
                 ),
                 value: s.sharingLocation,
                 onChanged: (v) =>
@@ -116,11 +119,11 @@ class SettingsScreen extends StatelessWidget {
           ),
 
           // ---- Map
-          _Section('Map', children: [_MapChoice(app: app)]),
+          _Section(Txt.map, children: [_MapChoice(app: app)]),
 
           // ---- Connection
           _Section(
-            'Connection',
+            Txt.connection,
             children: [
               ListTile(
                 leading: _statusDot(app.mqtt.status.value),
@@ -128,12 +131,12 @@ class SettingsScreen extends StatelessWidget {
                 subtitle: Text(
                   app.mqtt.lastError.value ??
                       (app.connection == null
-                          ? 'No group server yet'
+                          ? Txt.noGroupServerYet
                           : '${app.connection!.host}:${app.connection!.port}'),
                 ),
                 trailing: TextButton(
                   onPressed: () => app.updateSettings(s, reconnect: true),
-                  child: const Text('Reconnect'),
+                  child: const Text(Txt.reconnect),
                 ),
               ),
             ],
@@ -148,25 +151,35 @@ class SettingsScreen extends StatelessWidget {
                     .copyWith(dividerColor: Colors.transparent),
                 child: ExpansionTile(
                   leading: const Icon(Icons.tune_rounded),
-                  title: const Text('Advanced'),
-                  subtitle: const Text('You shouldn\'t need these'),
+                  title: const Text(Txt.advanced),
+                  subtitle: const Text(Txt.youShouldnTNeedThese),
                   children: [
-                    _InfoRow('Account', '@${s.username}'),
+                    _InfoRow(Txt.account, '@${s.username}'),
                     _InfoRow(
-                      'Publishes to',
-                      app.connection?.ownTopic ?? 'Nothing yet',
+                      Txt.publishesTo,
+                      app.connection?.ownTopic ?? Txt.nothingYet,
                     ),
                     _InfoRow(
-                      'Server',
+                      Txt.server,
                       app.connection == null
-                          ? 'None: your group isn\'t set up'
+                          ? Txt.noneYourGroupIsnT
                           : app.onOwnServer
-                          ? '${app.connection!.host} (${app.activeGroup!.name}\'s own)'
-                          : 'This app\'s server',
+                          ? Txt.sOwn(
+                              app.connection!.host,
+                              app.activeGroup!.name,
+                            )
+                          : Txt.accountServerLabel,
                     ),
                     ListTile(
-                      title: const Text('Keep-alive'),
-                      subtitle: Text('${s.keepAliveSeconds} seconds'),
+                      leading: const Icon(Icons.key_rounded),
+                      title: const Text(Txt.showMyLogin),
+                      subtitle: const Text(Txt.toUseThisAccountIn),
+                      enabled: app.connection != null,
+                      onTap: () => _showLogin(context, app),
+                    ),
+                    ListTile(
+                      title: const Text(Txt.keepAlive),
+                      subtitle: Text(Txt.seconds(s.keepAliveSeconds)),
                       trailing: DropdownButton<int>(
                         value:
                             const [
@@ -192,7 +205,7 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     ListTile(
                       leading: const Icon(Icons.my_location_rounded),
-                      title: const Text('Send my location now'),
+                      title: const Text(Txt.sendMyLocationNow),
                       onTap: () => app.location.reportNow('u'),
                     ),
                   ],
@@ -208,19 +221,19 @@ class SettingsScreen extends StatelessWidget {
             ),
             onPressed: () => _confirmSignOut(context, app),
             icon: const Icon(Icons.logout_rounded),
-            label: const Text('Sign out of this phone'),
+            label: const Text(Txt.signOutOfThisPhone),
           ),
           if (s.hasAccount)
             TextButton.icon(
               style: TextButton.styleFrom(foregroundColor: FlockColors.danger),
               onPressed: () => _confirmDelete(context, app),
               icon: const Icon(Icons.delete_forever_rounded),
-              label: const Text('Delete my account'),
+              label: const Text(Txt.deleteMyAccount),
             ),
           const SizedBox(height: 24),
           Center(
             child: Text(
-              'Flock · works with OwnTracks',
+              Txt.flockWorksWithOwntracks,
               style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
             ),
           ),
@@ -240,38 +253,112 @@ class SettingsScreen extends StatelessWidget {
   }
 
   String _statusText(ConnectionStatus st) => switch (st) {
-    ConnectionStatus.connected => 'Connected',
-    ConnectionStatus.connecting => 'Connecting…',
-    ConnectionStatus.disconnected => 'Offline',
-    ConnectionStatus.error => 'Can\'t connect',
+    ConnectionStatus.connected => Txt.connected,
+    ConnectionStatus.connecting => Txt.connecting,
+    ConnectionStatus.disconnected => Txt.offline,
+    ConnectionStatus.error => Txt.canTConnect,
   };
 
   static String _groupsSummary(AppState app) {
     final a = app.account;
-    if (a == null) return app.accountError ?? 'Loading…';
+    if (a == null) return app.accountError ?? Txt.loading;
     final names = [for (final g in a.groups) g.name];
     final waiting = a.waitingRequests;
     final parts = [
-      if (names.isNotEmpty) names.join(', ') else 'Not in a group yet',
-      if (waiting > 0) '$waiting waiting to join',
-      if (a.pending.isNotEmpty) 'waiting on ${a.pending.length} to let you in',
+      if (names.isNotEmpty) names.join(', ') else Txt.notInAGroupYet,
+      if (waiting > 0) Txt.waitingToJoin(waiting),
+      if (a.pending.isNotEmpty) Txt.waitingOnToLetYou(a.pending.length),
     ];
     return parts.join(' · ');
+  }
+
+  Future<void> _showLogin(BuildContext context, AppState app) async {
+    final c = app.connection;
+    if (c == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(Txt.showYourLogin),
+        content: const Text(Txt.anyoneWithThisLoginCan),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(Txt.cancel),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(Txt.show),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    final rows = <(String, String)>[
+      (Txt.mode, 'MQTT'),
+      (Txt.host, c.host),
+      (Txt.port, '${c.port}'),
+      (Txt.tls, c.useTls ? Txt.on : Txt.off),
+      (Txt.usernameUserid, c.username),
+      (Txt.password, c.password),
+      (Txt.deviceId, c.deviceName),
+      if (c.baseTopic != 'owntracks')
+        (Txt.publishTopic, '${c.baseTopic}/%u/%d'),
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+          children: [
+            const ListTile(
+              title: Text(Txt.yourLogin),
+              subtitle: Text(Txt.enterTheseInTheOther),
+            ),
+            for (final (k, v) in rows)
+              ListTile(
+                dense: true,
+                title: Text(k),
+                subtitle: SelectableText(
+                  v,
+                  style: const TextStyle(fontSize: 16),
+                ),
+                trailing: IconButton(
+                  tooltip: Txt.copy,
+                  icon: const Icon(Icons.copy_rounded),
+                  onPressed: () => Clipboard.setData(ClipboardData(text: v)),
+                ),
+              ),
+            if (c.caPem.isNotEmpty)
+              ListTile(
+                title: const Text(Txt.serverCertificate),
+                subtitle: const Text(Txt.thisServerUsesItsOwn),
+                trailing: IconButton(
+                  tooltip: Txt.copyCertificate,
+                  icon: const Icon(Icons.copy_rounded),
+                  onPressed: () =>
+                      Clipboard.setData(ClipboardData(text: c.caPem)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _confirmDelete(BuildContext context, AppState app) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete your account?'),
-        content: const Text(
-          'You leave all your groups and stop sharing your location. Your '
-          'history is gone within a few days. This can\'t be undone.',
-        ),
+        title: const Text(Txt.deleteYourAccount),
+        content: const Text(Txt.youLeaveAllYourGroups),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: const Text(Txt.cancel),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
@@ -279,7 +366,7 @@ class SettingsScreen extends StatelessWidget {
               minimumSize: const Size(0, 44),
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+            child: const Text(Txt.delete),
           ),
         ],
       ),
@@ -298,16 +385,12 @@ class SettingsScreen extends StatelessWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Sign out?'),
-        content: const Text(
-          'This phone stops sharing your location and forgets your login. '
-          'You can\'t sign back in to the same account, so you\'ll make a new '
-          'one and ask to join your groups again.',
-        ),
+        title: const Text(Txt.signOut),
+        content: const Text(Txt.thisPhoneStopsSharingYour),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: const Text(Txt.cancel),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
@@ -315,7 +398,7 @@ class SettingsScreen extends StatelessWidget {
               minimumSize: const Size(0, 44),
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Sign out'),
+            child: const Text(Txt.signOut2),
           ),
         ],
       ),
@@ -387,10 +470,10 @@ class _MapChoice extends StatelessWidget {
   final AppState app;
 
   static const _labels = {
-    MapStyle.satellite: ('Satellite', Icons.satellite_alt_rounded),
-    MapStyle.streets: ('Streets', Icons.map_rounded),
-    MapStyle.terrain: ('Terrain', Icons.terrain_rounded),
-    MapStyle.dark: ('Dark', Icons.dark_mode_rounded),
+    MapStyle.satellite: (Txt.satellite, Icons.satellite_alt_rounded),
+    MapStyle.streets: (Txt.streets, Icons.map_rounded),
+    MapStyle.terrain: (Txt.terrain, Icons.terrain_rounded),
+    MapStyle.dark: (Txt.dark, Icons.dark_mode_rounded),
   };
 
   @override
@@ -430,19 +513,17 @@ class _MapChoice extends StatelessWidget {
               RadioListTile<MapProvider>(
                 value: MapProvider.google,
                 enabled: google,
-                title: const Text('Google Maps'),
+                title: const Text(Txt.googleMaps),
                 subtitle: Text(
                   google
-                      ? 'The familiar Google look, with satellite and terrain.'
-                      : 'Not available in this build (no Google Maps key).',
+                      ? Txt.theFamiliarGoogleLookWith
+                      : Txt.notAvailableInThisBuild,
                 ),
               ),
               const RadioListTile<MapProvider>(
                 value: MapProvider.standard,
-                title: Text('OpenStreetMap'),
-                subtitle: Text(
-                  'No Google involved. Satellite photos come from Esri.',
-                ),
+                title: Text(Txt.openstreetmap),
+                subtitle: Text(Txt.noGoogleInvolvedSatellitePhotos),
               ),
             ],
           ),
@@ -509,7 +590,7 @@ class _ProfileSheetState extends State<_ProfileSheet> {
               face: face,
               size: 96,
               enlargeable: true,
-              label: 'Your photo',
+              label: Txt.yourPhoto,
             ),
           ),
           const SizedBox(height: 8),
@@ -519,12 +600,12 @@ class _ProfileSheetState extends State<_ProfileSheet> {
               TextButton.icon(
                 onPressed: () => _pick(ImageSource.camera),
                 icon: const Icon(Icons.photo_camera_rounded),
-                label: const Text('Camera'),
+                label: const Text(Txt.camera),
               ),
               TextButton.icon(
                 onPressed: () => _pick(ImageSource.gallery),
                 icon: const Icon(Icons.photo_library_rounded),
-                label: const Text('Library'),
+                label: const Text(Txt.library),
               ),
               if (face != null)
                 TextButton(
@@ -532,7 +613,7 @@ class _ProfileSheetState extends State<_ProfileSheet> {
                     await app.setMyPhoto(null);
                     if (mounted) setState(() {});
                   },
-                  child: const Text('Remove'),
+                  child: const Text(Txt.remove2),
                 ),
             ],
           ),
@@ -540,7 +621,7 @@ class _ProfileSheetState extends State<_ProfileSheet> {
           TextField(
             controller: _name,
             textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(labelText: 'Your name'),
+            decoration: const InputDecoration(labelText: Txt.yourName),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -548,7 +629,7 @@ class _ProfileSheetState extends State<_ProfileSheet> {
             maxLength: 2,
             textCapitalization: TextCapitalization.characters,
             decoration: const InputDecoration(
-              labelText: 'Initials',
+              labelText: Txt.initials,
               counterText: '',
             ),
             onChanged: (_) => setState(() {}),
@@ -564,7 +645,7 @@ class _ProfileSheetState extends State<_ProfileSheet> {
               );
               if (context.mounted) Navigator.pop(context);
             },
-            child: const Text('Save'),
+            child: const Text(Txt.save),
           ),
         ],
       ),
@@ -572,7 +653,8 @@ class _ProfileSheetState extends State<_ProfileSheet> {
   }
 }
 
-/// Tracking mode is the group's: the leader sets it, everyone else sees it.
+/// Your tracking level. The group's leader sets the default; you can pick
+/// your own.
 class _GroupTrackingTile extends StatelessWidget {
   const _GroupTrackingTile({required this.app});
   final AppState app;
@@ -582,25 +664,80 @@ class _GroupTrackingTile extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final g = app.activeGroup;
     final mode = app.connection?.trackingMode;
-    final leader = g != null && g.isLeader;
+    final mine = app.settings.myTracking;
     return ListTile(
       leading: const Icon(Icons.speed_rounded),
-      title: Text(mode == null ? 'Tracking' : 'Tracking: ${mode.label}'),
+      title: Text(mode == null ? Txt.tracking : Txt.tracking3(mode.label)),
       subtitle: Text(
         g == null
-            ? 'Join or start a group to start sharing.'
+            ? Txt.joinOrStartAGroup
             : g.config == null
-            ? '${g.name} isn\'t set up yet.'
-            : '${mode!.description} Set by ${leader ? 'you' : g.leaderName} '
-                  'for ${g.name}.',
+            ? Txt.isnTSetUpYet2(g.name)
+            : mine == null
+            ? Txt.setByFor(
+                mode!.description,
+                g.isLeader ? Txt.you : g.leaderName,
+                g.name,
+              )
+            : mode!.description,
         style: TextStyle(color: cs.onSurfaceVariant),
       ),
-      trailing: leader ? const Icon(Icons.chevron_right_rounded) : null,
-      onTap: leader
-          ? () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => GroupSettingsScreen(group: g)),
-            )
-          : null,
+      trailing: const Icon(Icons.chevron_right_rounded),
+      onTap: g?.config == null ? null : () => _pick(context, g!),
+    );
+  }
+
+  void _pick(BuildContext context, Group g) {
+    final def = app.groupTracking ?? TrackingMode.balanced;
+    final mine = app.settings.myTracking;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        Widget option(TrackingMode? m, String title, String sub) => ListTile(
+          title: Text(title),
+          subtitle: Text(sub),
+          trailing: mine == m ? const Icon(Icons.check_rounded) : null,
+          onTap: () {
+            Navigator.pop(ctx);
+            app.setMyTracking(m);
+          },
+        );
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  Txt.yourTracking,
+                  style: Theme.of(ctx).textTheme.titleMedium,
+                ),
+              ),
+              option(
+                null,
+                Txt.groupDefault(def.label),
+                Txt.groupDefaultBy(g.isLeader ? Txt.you : g.leaderName, g.name),
+              ),
+              for (final m in TrackingMode.values)
+                option(m, m.label, m.description),
+              if (g.isLeader)
+                ListTile(
+                  leading: const Icon(Icons.tune_rounded),
+                  title: const Text(Txt.changeGroupDefault),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => GroupSettingsScreen(group: g),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
