@@ -3,16 +3,19 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flock/models/person.dart';
 import 'package:flock/models/settings.dart';
 import 'package:flock/services/account_service.dart';
 import 'package:flock/services/location_service.dart';
 import 'package:flock/services/mqtt_service.dart';
 import 'package:flock/services/owntracks_protocol.dart';
+import 'package:flock/services/recorder_service.dart';
 import 'package:flock/services/settings_store.dart';
 import 'package:flock/state/app_state.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:latlong2/latlong.dart';
 
 /// A throwaway CA made for these tests, and its fingerprint (same as the
 /// server's `ca_fingerprint`).
@@ -453,6 +456,121 @@ void main() {
     });
   });
 
+  group('places', () {
+    const beach = {
+      'id': 3,
+      'name': 'Mona Vale Beach',
+      'lat': -33.677,
+      'lon': 151.31,
+      'radius': 150,
+      'created_by': 'jack-lee',
+    };
+
+    test('read from the group, and found by distance', () {
+      final g = Account.fromJson(meJson()..['groups'][0]['places'] = [beach])
+          .groups
+          .single;
+      final p = g.places.single;
+      expect(
+        (p.name, p.radius, p.createdBy),
+        ('Mona Vale Beach', 150, 'jack-lee'),
+      );
+      expect(
+        placeAt(g.places, const LatLng(-33.6775, 151.3102))?.name,
+        'Mona Vale Beach',
+      );
+      expect(placeAt(g.places, const LatLng(-33.70, 151.31)), isNull);
+    });
+
+    late _Mqtt mqtt;
+    late _Recorder recorder;
+    late AppState app;
+    Future<void> boot() async {
+      final store = _Store()
+        ..s = const AppSettings(
+          username: 'maya-chen',
+          password: 'mine',
+          displayName: 'Maya Chen',
+          accountServer: 'flock.example.net:8443',
+          setupComplete: true,
+        );
+      mqtt = _Mqtt();
+      recorder = _Recorder();
+      final me = meJson();
+      me['groups'][0]['places'] = [beach];
+      app = AppState(
+        store: store,
+        mqtt: mqtt,
+        location: _Location(),
+        recorder: recorder,
+        accounts: _Accounts()..response = me,
+      );
+      await app.init();
+      await app.refreshAccount();
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('arriving and leaving are announced', () async {
+      await boot();
+      final events = <String>[];
+      final sub = app.placeEvents.listen(
+        (e) => events.add(
+          '${e.person.user} ${e.arrived ? 'at' : 'left'} ${e.place.name}',
+        ),
+      );
+      mqtt.inject('owntracks/jack-lee/phone', _loc(-33.70, 151.31));
+      await Future<void>.delayed(Duration.zero);
+      mqtt.inject('owntracks/jack-lee/phone', _loc(-33.677, 151.31));
+      await Future<void>.delayed(Duration.zero);
+      mqtt.inject(
+        'owntracks/jack-lee/phone',
+        _loc(-33.6771, 151.3101),
+      ); // still there
+      await Future<void>.delayed(Duration.zero);
+      mqtt.inject('owntracks/jack-lee/phone', _loc(-33.70, 151.31));
+      await Future<void>.delayed(Duration.zero);
+      await sub.cancel();
+      expect(events, [
+        'jack-lee at Mona Vale Beach',
+        'jack-lee left Mona Vale Beach',
+      ]);
+    });
+
+    test(
+      '"at X since": from today\'s history, only while still there',
+      () async {
+        await boot();
+        final now = DateTime.now();
+        final arrived = now.subtract(const Duration(hours: 3));
+        recorder.fixes = [
+          LocationFix(
+            lat: -33.60,
+            lon: 151.30,
+            timestamp: arrived.subtract(const Duration(minutes: 30)),
+          ),
+          for (var m = 0; m <= 180; m += 10)
+            LocationFix(
+              lat: -33.677,
+              lon: 151.31,
+              timestamp: arrived.add(Duration(minutes: m)),
+            ),
+        ];
+        mqtt.inject('owntracks/jack-lee/phone', _loc(-33.677, 151.31));
+        await Future<void>.delayed(Duration.zero);
+        final jack = app.people.single;
+        final stay = await app.currentStay(jack);
+        expect(stay, isNotNull);
+        expect(stay!.start, arrived);
+        expect(app.placeFor(stay.center)?.name, 'Mona Vale Beach');
+
+        // Moved on: no longer "at" anywhere.
+        mqtt.inject('owntracks/jack-lee/phone', _loc(-33.75, 151.30));
+        await Future<void>.delayed(Duration.zero);
+        expect(await app.currentStay(jack), isNull);
+      },
+    );
+  });
+
   group('group settings', () {
     late _Store store;
     late _Mqtt mqtt;
@@ -495,39 +613,34 @@ void main() {
       expect(loc.modes.last, TrackingMode.precise); // the leader's choice
     });
 
-    test(
-      'a group on its own server: shared login, your name as device',
-      () async {
-        await boot({
-          'standard': false,
-          'host': 'mqtt.example.com',
-          'port': 1883,
-          'tls': false,
-          'username': 'crew',
-          'password': 'shared',
-          'topic_prefix': 'ot',
-          'recorder_url': 'https://mqtt.example.com/rec',
-          'tracking_mode': 'batterySaver',
-        });
-        final c = app.connection!;
-        expect(
-          (c.host, c.port, c.useTls, c.username, c.password),
-          ('mqtt.example.com', 1883, false, 'crew', 'shared'),
-        );
-        expect(c.ownTopic, 'ot/crew/maya-chen');
-        expect(c.recorderUrl, 'https://mqtt.example.com/rec');
-        expect(c.caPem, '');
-        expect(app.onOwnServer, isTrue);
-        expect(loc.modes.last, TrackingMode.batterySaver);
+    test('a group on its own server: still your own login', () async {
+      await boot({
+        'standard': false,
+        'host': 'mqtt.example.com',
+        'port': 1883,
+        'tls': false,
+        'topic_prefix': 'ot',
+        'recorder_url': 'https://mqtt.example.com/rec',
+        'tracking_mode': 'batterySaver',
+      });
+      final c = app.connection!;
+      expect(
+        (c.host, c.port, c.useTls, c.username, c.password),
+        ('mqtt.example.com', 1883, false, 'maya-chen', 'mine'),
+      );
+      expect(c.ownTopic, 'ot/maya-chen/phone');
+      expect(c.recorderUrl, 'https://mqtt.example.com/rec');
+      expect(c.caPem, '');
+      expect(app.onOwnServer, isTrue);
+      expect(loc.modes.last, TrackingMode.batterySaver);
 
-        // People on that login show up, named from the group; others don't.
-        mqtt.inject('ot/crew/jack-lee', _loc(-33.87, 151.2));
-        mqtt.inject('ot/someone-else/phone', _loc(-33.87, 151.2));
-        await Future<void>.delayed(Duration.zero);
-        expect(app.people.map((p) => p.device), ['jack-lee']);
-        expect(app.people.single.name, 'Jack Lee');
-      },
-    );
+      // Group members show up, named from the group; others don't.
+      mqtt.inject('ot/jack-lee/phone', _loc(-33.87, 151.2));
+      mqtt.inject('ot/someone-else/phone', _loc(-33.87, 151.2));
+      await Future<void>.delayed(Duration.zero);
+      expect(app.people.map((p) => p.user), ['jack-lee']);
+      expect(app.people.single.name, 'Jack Lee');
+    });
 
     test('a group without a server: nothing to connect to', () async {
       await boot(null);
@@ -626,6 +739,18 @@ void main() {
       expect(app.people.map((p) => p.user), ['sam-o']);
     });
   });
+}
+
+class _Recorder extends RecorderService {
+  List<LocationFix> fixes = const [];
+  @override
+  Future<List<LocationFix>> history(
+    AppSettings s, {
+    required String user,
+    required String device,
+    required DateTime from,
+    DateTime? to,
+  }) async => fixes;
 }
 
 /// Stands in for a network failure inside MockClient.

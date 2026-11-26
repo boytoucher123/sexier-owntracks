@@ -3,6 +3,10 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
+
+import '../util/format.dart';
+
+import 'package:latlong2/latlong.dart';
 import 'package:http/io_client.dart';
 
 import '../config/server_config.dart';
@@ -65,14 +69,13 @@ class GroupConfig {
     this.tls = true,
     this.ca = '',
     this.recorderUrl = '',
-    this.username = '',
-    this.password = '',
     this.topicPrefix = 'owntracks',
     this.trackingMode = TrackingMode.balanced,
   });
 
-  /// Runs on this app's own server, with each person's own login. Only
-  /// groups from before group settings existed are like this.
+  /// Runs on the server your account is on (its details are filled in by
+  /// that server). Otherwise the leader's own server. Either way everyone
+  /// signs in with their own account.
   final bool standard;
   final String host;
   final int port;
@@ -83,9 +86,6 @@ class GroupConfig {
   final String ca;
   final String recorderUrl;
 
-  /// The login everyone in the group uses on the group's own server.
-  final String username;
-  final String password;
   final String topicPrefix;
   final TrackingMode trackingMode;
 
@@ -96,8 +96,6 @@ class GroupConfig {
     tls: j['tls'] as bool? ?? true,
     ca: j['ca'] as String? ?? '',
     recorderUrl: j['recorder_url'] as String? ?? '',
-    username: j['username'] as String? ?? '',
-    password: j['password'] as String? ?? '',
     topicPrefix: j['topic_prefix'] as String? ?? 'owntracks',
     trackingMode: TrackingMode.values.firstWhere(
       (m) => m.name == j['tracking_mode'],
@@ -112,8 +110,6 @@ class GroupConfig {
     'tls': tls,
     'ca': ca,
     'recorder_url': recorderUrl,
-    'username': username,
-    'password': password,
     'topic_prefix': topicPrefix,
     'tracking_mode': trackingMode.name,
   };
@@ -130,6 +126,7 @@ class Group {
     this.requests = const [],
     this.config,
     this.invite,
+    this.places = const [],
   });
   final int id;
   final String name;
@@ -147,6 +144,9 @@ class Group {
   /// What the leader shares: `flock://host:port/join/CODE?ca=…`.
   final String? invite;
 
+  /// Shared places (Home, School...) anyone in the group can add.
+  final List<Place> places;
+
   bool hasMember(String username) => members.any((m) => m.username == username);
 
   String? memberName(String username) => members
@@ -156,6 +156,53 @@ class Group {
 
   String get leaderName =>
       members.where((m) => m.leader).map((m) => m.name).firstOrNull ?? leader;
+}
+
+/// A named spot the group shares: "At School since 3 pm".
+class Place {
+  const Place({
+    required this.id,
+    required this.name,
+    required this.lat,
+    required this.lon,
+    this.radius = 100,
+    this.createdBy = '',
+  });
+  final int id;
+  final String name;
+  final double lat;
+  final double lon;
+
+  /// Metres.
+  final double radius;
+  final String createdBy;
+
+  LatLng get center => LatLng(lat, lon);
+
+  bool contains(LatLng p) => metersBetween(center, p) <= radius;
+
+  factory Place.fromJson(Map<String, dynamic> j) => Place(
+    id: (j['id'] as num).toInt(),
+    name: j['name'] as String? ?? '',
+    lat: (j['lat'] as num).toDouble(),
+    lon: (j['lon'] as num).toDouble(),
+    radius: (j['radius'] as num? ?? 100).toDouble(),
+    createdBy: j['created_by'] as String? ?? '',
+  );
+}
+
+/// The place [p] is in, nearest centre first, or null.
+Place? placeAt(Iterable<Place> places, LatLng p) {
+  Place? best;
+  var bestD = double.infinity;
+  for (final pl in places) {
+    final d = metersBetween(pl.center, p);
+    if (d <= pl.radius && d < bestD) {
+      best = pl;
+      bestD = d;
+    }
+  }
+  return best;
 }
 
 /// A group you asked to join that hasn't let you in yet.
@@ -224,6 +271,7 @@ class Account {
             config: g['config'] is Map
                 ? GroupConfig.fromJson(Map<String, dynamic>.from(g['config']))
                 : null,
+            places: [for (final p in list(g['places'])) Place.fromJson(p)],
             members: [
               for (final m in list(g['members']))
                 GroupMember(
@@ -421,6 +469,33 @@ class AccountService {
   ) async => Account.fromJson(
     await _call('PUT', '/groups/$group/config', login: s, body: body),
   );
+
+  /// Anyone in the group: share a place with everyone in it.
+  Future<Account> addPlace(
+    AppSettings s,
+    int group, {
+    required String name,
+    required LatLng at,
+    required double radius,
+  }) async => Account.fromJson(
+    await _call(
+      'POST',
+      '/groups/$group/places',
+      login: s,
+      body: {
+        'name': name,
+        'lat': at.latitude,
+        'lon': at.longitude,
+        'radius': radius.round(),
+      },
+    ),
+  );
+
+  /// Whoever added it, or the leader.
+  Future<Account> removePlace(AppSettings s, int group, int place) async =>
+      Account.fromJson(
+        await _call('DELETE', '/groups/$group/places/$place', login: s),
+      );
 
   Future<Account> makeLeader(AppSettings s, int group, String user) async =>
       Account.fromJson(

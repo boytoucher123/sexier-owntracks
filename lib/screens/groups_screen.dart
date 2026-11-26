@@ -12,6 +12,7 @@ import '../theme.dart';
 import '../util/format.dart';
 import '../widgets/avatar.dart';
 import 'group_settings_screen.dart';
+import 'places_screen.dart';
 import '../strings.dart';
 
 /// Your groups: who's in them, invite codes, and people asking to join.
@@ -150,6 +151,7 @@ class GroupCard extends StatelessWidget {
               style: t.titleSmall?.copyWith(color: cs.onSurfaceVariant),
             ),
             for (final m in g.members) _MemberTile(group: g, member: m),
+            GroupPlaces(group: g),
           ],
         ),
       ),

@@ -218,6 +218,11 @@ def db():
           status TEXT NOT NULL CHECK (status IN ('pending', 'member')),
           since INTEGER NOT NULL,
           PRIMARY KEY (group_id, username));
+        CREATE TABLE IF NOT EXISTS places (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+          name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
+          radius INTEGER NOT NULL, created_by TEXT, created INTEGER NOT NULL);
         """
     )
     cols = [r[1] for r in c.execute("PRAGMA table_info(groups)")]
@@ -521,9 +526,19 @@ def me(user):
             item = {"id": g["id"], "name": g["name"], "leader": g["leader"],
                     "role": "leader" if is_leader else "member", "members": members,
                     # Where the group's locations go and how often members
-                    # report. Only approved members get it (it can hold the
-                    # login for the group's own server). None = not set up yet.
-                    "config": _config(g)}
+                    # report. Only approved members get it. None = not set
+                    # up yet.
+                    "config": _config(g),
+                    # Shared places (Home, School...), for "At School since".
+                    "places": [
+                        {"id": p["id"], "name": p["name"], "lat": p["lat"],
+                         "lon": p["lon"], "radius": p["radius"],
+                         "created_by": p["created_by"]}
+                        for p in c.execute(
+                            "SELECT * FROM places WHERE group_id=? ORDER BY name COLLATE NOCASE",
+                            (g["id"],),
+                        )
+                    ]}
             if is_leader:
                 item["code"] = format_code(g["code"])
                 item["invite"] = invite_text(g["code"])
@@ -641,6 +656,68 @@ def remove_member(user, gid, other):
     return me(user)
 
 
+MAX_PLACES = 50
+
+
+def _require_member(c, gid, user):
+    g = _group(c, gid)
+    row = c.execute(
+        "SELECT status FROM members WHERE group_id=? AND username=?", (gid, user)
+    ).fetchone()
+    if not row or row[0] != "member":
+        raise ApiError(403, "Only people in the group can do that.")
+    return g
+
+
+def add_place(user, gid, body):
+    """Anyone in the group can add a shared place."""
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ApiError(400, "Give the place a name.")
+    name = " ".join(name.split())
+    if len(name) > 40:
+        raise ApiError(400, "That name is too long (40 characters at most).")
+    try:
+        lat, lon = float(body.get("lat")), float(body.get("lon"))
+    except (TypeError, ValueError):
+        raise ApiError(400, "The place needs a location.")
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ApiError(400, "The place needs a location.")
+    radius = body.get("radius", 100)
+    if not isinstance(radius, (int, float)) or not 25 <= radius <= 2000:
+        raise ApiError(400, "The size must be between 25 m and 2 km.")
+    with _lock:
+        c = db()
+        _require_member(c, gid, user)
+        n = c.execute("SELECT COUNT(*) FROM places WHERE group_id=?", (gid,)).fetchone()[0]
+        if n >= MAX_PLACES:
+            raise ApiError(400, f"A group can have {MAX_PLACES} places at most.")
+        with c:
+            c.execute(
+                """INSERT INTO places (group_id, name, lat, lon, radius, created_by, created)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (gid, name, lat, lon, int(radius), user, int(time.time())),
+            )
+    return me(user)
+
+
+def remove_place(user, gid, pid):
+    """Whoever added it, or the leader."""
+    with _lock:
+        c = db()
+        g = _require_member(c, gid, user)
+        p = c.execute(
+            "SELECT created_by FROM places WHERE id=? AND group_id=?", (pid, gid)
+        ).fetchone()
+        if not p:
+            raise ApiError(404, "That place isn't there any more.")
+        if p[0] != user and g["leader"] != user:
+            raise ApiError(403, "Only whoever added it, or the leader, can remove it.")
+        with c:
+            c.execute("DELETE FROM places WHERE id=?", (pid,))
+    return me(user)
+
+
 def new_code(user, gid):
     with _lock:
         c = db()
@@ -663,7 +740,8 @@ def rename_group(user, gid, name):
 
 
 def _check_config(body):
-    """A leader's own server for the group, plus its tracking mode."""
+    """A leader's own server for the group, plus its tracking mode. There is
+    no shared login: everyone signs in with their own account."""
     def text(key, limit, required=False):
         v = body.get(key, "")
         if v is None:
@@ -696,8 +774,6 @@ def _check_config(body):
     return {
         "standard": False, "host": host, "port": port, "tls": tls, "ca": ca,
         "recorder_url": recorder,
-        "username": text("username", 100, required=True),
-        "password": text("password", 200),
         "topic_prefix": text("topic_prefix", 50) or "owntracks",
         "tracking_mode": mode,
     }
@@ -720,10 +796,19 @@ def set_config(user, gid, body):
             new = dict(current, tracking_mode=mode)
         else:
             new = _check_config(body)
+            if current and current.get("standard") and _is_this_server(new):
+                # Saved this server's own details: still the standard setup.
+                new = dict(current, tracking_mode=new["tracking_mode"])
         with c:
             c.execute("UPDATE groups SET config=? WHERE id=?", (json.dumps(new), gid))
             write_acl(c)
     return me(user)
+
+
+def _is_this_server(cfg):
+    d = server_details()
+    return bool(d) and (cfg["host"].lower(), cfg["port"], cfg["tls"]) == (
+        d["host"].lower(), d["port"], d["tls"])
 
 
 def set_standard(gid, mode="balanced"):
@@ -789,6 +874,8 @@ ROUTES = [
     ("PUT", r"/flock/api/groups/(\d+)/config", "set_config"),
     ("POST", r"/flock/api/groups/(\d+)/requests/([a-z0-9-]+)/(approve|deny)", "decide"),
     ("DELETE", r"/flock/api/groups/(\d+)/members/([a-z0-9-]+)", "remove_member"),
+    ("POST", r"/flock/api/groups/(\d+)/places", "add_place"),
+    ("DELETE", r"/flock/api/groups/(\d+)/places/(\d+)", "remove_place"),
 ]
 
 
@@ -897,6 +984,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, decide(user, gid, args[1], args[2] == "approve"))
         if name == "remove_member":
             return self._send(200, remove_member(user, gid, args[1]))
+        if name == "add_place":
+            return self._send(201, add_place(user, gid, body))
+        if name == "remove_place":
+            return self._send(200, remove_place(user, gid, int(args[1])))
         raise ApiError(404, "Not found.")
 
     def do_GET(self):

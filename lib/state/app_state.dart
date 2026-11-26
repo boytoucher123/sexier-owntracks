@@ -3,6 +3,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
+import '../util/format.dart';
+import '../util/timeline.dart';
+
+import 'package:latlong2/latlong.dart';
+
 import '../config/server_config.dart';
 import '../models/person.dart';
 import '../models/settings.dart';
@@ -17,6 +22,14 @@ import '../services/settings_store.dart';
 import '../strings.dart';
 
 /// The single source of truth the UI listens to.
+/// Someone arrived at or left one of the group's places.
+class PlaceEvent {
+  const PlaceEvent(this.person, this.place, {required this.arrived});
+  final Person person;
+  final Place place;
+  final bool arrived;
+}
+
 class AppState extends ChangeNotifier {
   AppState({
     SettingsStore? store,
@@ -129,17 +142,15 @@ class AppState extends ChangeNotifier {
         trackingMode: s.myTracking ?? c.trackingMode,
       );
     }
-    // The leader's own server: the group's shared login, and your username
-    // as the device, so everyone is owntracks/<login>/<username>.
+    // The leader's own server: still your own login (there's no shared
+    // group login), so everyone is owntracks/<username>/phone.
     return s.copyWith(
       host: c.host,
       port: c.port,
       useTls: c.tls,
       useWebSocket: false,
-      username: c.username,
-      password: c.password,
       baseTopic: c.topicPrefix,
-      deviceName: s.username,
+      deviceName: kDeviceName,
       recorderUrl: c.recorderUrl,
       recorderUsername: '',
       recorderPassword: '',
@@ -153,7 +164,6 @@ class AppState extends ChangeNotifier {
   bool _allowed(String user, String device) {
     final c = connection;
     if (c == null) return false;
-    if (onOwnServer) return user == c.username;
     final g = activeGroup;
     return user == _settings.username || g == null || g.hasMember(user);
   }
@@ -162,7 +172,7 @@ class AppState extends ChangeNotifier {
     if (isMe(p)) return _account?.name;
     final g = activeGroup;
     if (g == null) return null;
-    return onOwnServer ? g.memberName(p.device) : g.memberName(p.user);
+    return g.memberName(p.user);
   }
 
   Person? personByTopic(String topic) => _people[topic];
@@ -502,6 +512,83 @@ class AppState extends ChangeNotifier {
   Future<String?> makeLeader(Group g, String username) =>
       _act(() => accounts.makeLeader(_settings, g.id, username));
 
+  // -------------------------------------------------------------- places ---
+
+  /// The active group's shared places.
+  List<Place> get places => activeGroup?.places ?? const [];
+
+  /// The shared place [p] is in, if any.
+  Place? placeFor(LatLng p) => placeAt(places, p);
+
+  final _placeEvents = StreamController<PlaceEvent>.broadcast();
+
+  /// Someone arriving at or leaving one of the group's places.
+  Stream<PlaceEvent> get placeEvents => _placeEvents.stream;
+
+  void _checkPlaces(Person p, LocationFix before, LocationFix now) {
+    // Only fresh news: not old positions arriving after a reconnect.
+    if (DateTime.now().difference(now.timestamp) >
+        const Duration(minutes: 10)) {
+      return;
+    }
+    final was = placeFor(before.latLng);
+    final isAt = placeFor(now.latLng);
+    if (was?.id == isAt?.id) return;
+    if (was != null) _placeEvents.add(PlaceEvent(p, was, arrived: false));
+    if (isAt != null) _placeEvents.add(PlaceEvent(p, isAt, arrived: true));
+  }
+
+  Future<String?> addPlace(
+    Group g, {
+    required String name,
+    required LatLng at,
+    required double radius,
+  }) => _act(
+    () =>
+        accounts.addPlace(_settings, g.id, name: name, at: at, radius: radius),
+  );
+
+  Future<String?> removePlace(Group g, Place place) =>
+      _act(() => accounts.removePlace(_settings, g.id, place.id));
+
+  final Map<String, (String, Future<Stay?>)> _stays = {};
+
+  /// Where [p] has been since arriving at their current spot (from today's
+  /// history), or null when they're on the move or there's no history.
+  /// Cached until their location changes.
+  Future<Stay?> currentStay(Person p) {
+    final last = p.last;
+    if (last == null) return Future.value();
+    final key =
+        '${last.timestamp.millisecondsSinceEpoch}|${last.lat}|${last.lon}';
+    final have = _stays[p.topic];
+    if (have != null && have.$1 == key) return have.$2;
+    final f = () async {
+      try {
+        final now = DateTime.now();
+        final fixes = await history(
+          p,
+          now.subtract(const Duration(hours: 24)),
+          now,
+        );
+        final all = [
+          ...fixes,
+          if (fixes.isEmpty || fixes.last.timestamp.isBefore(last.timestamp))
+            last,
+        ];
+        final tl = buildTimeline(all);
+        final stay = tl.isEmpty ? null : tl.last;
+        if (stay is! Stay) return null;
+        if (metersBetween(stay.center, last.latLng) > 150) return null;
+        return stay;
+      } on Object {
+        return null;
+      }
+    }();
+    _stays[p.topic] = (key, f);
+    return f;
+  }
+
   /// Leader: how often everyone in the group reports their location.
   Future<String?> setGroupTracking(Group g, TrackingMode mode) => _act(
     () => accounts.setConfig(_settings, g.id, {'tracking_mode': mode.name}),
@@ -511,7 +598,8 @@ class AppState extends ChangeNotifier {
   Future<String?> setGroupServer(Group g, GroupConfig c) =>
       _act(() => accounts.setConfig(_settings, g.id, c.toServerJson()));
 
-  /// Checks a group server's details by logging in, before saving them.
+  /// Checks a group server's details by logging in with your own account,
+  /// before saving them.
   Future<ConnectionTestResult> testGroupServer(GroupConfig c) =>
       MqttService.test(
         _settings.copyWith(
@@ -519,10 +607,8 @@ class AppState extends ChangeNotifier {
           port: c.port,
           useTls: c.tls,
           useWebSocket: false,
-          username: c.username,
-          password: c.password,
           baseTopic: c.topicPrefix,
-          deviceName: _settings.username,
+          deviceName: kDeviceName,
           caPem: c.ca,
           allowUntrustedCertificates: false,
         ),
@@ -669,7 +755,9 @@ class AppState extends ChangeNotifier {
       if (!mine && !_allowed(parts.user, parts.device)) return;
       final p = _ensurePerson(parts.deviceTopic, parts: parts)!;
       if (p.last == null || !fix.timestamp.isBefore(p.last!.timestamp)) {
+        final before = p.last;
         p.last = fix;
+        if (before != null) _checkPlaces(p, before, fix);
       }
       if (fix.trackerId != null && fix.trackerId!.isNotEmpty) {
         p.trackerId = fix.trackerId;

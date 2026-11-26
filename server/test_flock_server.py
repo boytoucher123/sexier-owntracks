@@ -306,7 +306,7 @@ class GroupConfigTest(unittest.TestCase):
         asker = self.signup("Own Server Asker")
         g = self.group(leader, "Own Server")
         cfg = {"host": "mqtt.example.com", "port": 8883, "tls": True,
-               "username": "crew", "password": "s3cret",
+               "username": "crew", "password": "s3cret",  # ignored: no shared login
                "recorder_url": "https://mqtt.example.com/owntracks",
                "tracking_mode": "precise"}
         s, b = self.api.call("PUT", f"/flock/api/groups/{g['id']}/config", cfg, login=friend)
@@ -314,15 +314,16 @@ class GroupConfigTest(unittest.TestCase):
         s, me = self.api.call("PUT", f"/flock/api/groups/{g['id']}/config", cfg, login=leader)
         self.assertEqual(s, 200, me)
         got = [x for x in me["groups"] if x["id"] == g["id"]][0]["config"]
-        self.assertEqual((got["standard"], got["host"], got["password"], got["tracking_mode"]),
-                         (False, "mqtt.example.com", "s3cret", "precise"))
+        self.assertEqual((got["standard"], got["host"], got["tracking_mode"]),
+                         (False, "mqtt.example.com", "precise"))
+        self.assertNotIn("password", got)
         self.assertEqual(got["topic_prefix"], "owntracks")
 
         self.api.call("POST", "/flock/api/join", {"code": g["code"]}, login=friend)
         self.api.call("POST", "/flock/api/join", {"code": g["code"]}, login=asker)
         self.api.call("POST", f"/flock/api/groups/{g['id']}/requests/{friend['username']}/approve", login=leader)
         _, fme = self.api.call("GET", "/flock/api/me", login=friend)
-        self.assertEqual(fme["groups"][0]["config"]["username"], "crew")
+        self.assertEqual(fme["groups"][0]["config"]["host"], "mqtt.example.com")
         _, ame = self.api.call("GET", "/flock/api/me", login=asker)
         self.assertNotIn("config", json.dumps(ame["pending"]))  # not until let in
         self.assertNotIn("s3cret", json.dumps(ame))
@@ -347,7 +348,7 @@ class GroupConfigTest(unittest.TestCase):
         s, b = put({"host": "x.com", "username": "u", "ca": "not a cert"})
         self.assertIn("PEM", b["error"])
         s, b = put({"host": "x.com"})
-        self.assertIn("username", b["error"])
+        self.assertEqual(s, 200)  # no login needed: everyone uses their own
 
     def test_standard_group_can_change_tracking_but_leaving_is_for_good(self):
         leader = self.signup("Std Leader")
@@ -359,9 +360,66 @@ class GroupConfigTest(unittest.TestCase):
         self.assertEqual((got["standard"], got["tracking_mode"]), (True, "precise"))
         stored = json.loads(fs.db().execute("SELECT config FROM groups WHERE id=?", (g["id"],)).fetchone()[0])
         self.assertEqual(stored, {"standard": True, "tracking_mode": "precise"})  # no address frozen in
+        # Saving this server's own details (as the app shows them) keeps it standard.
+        s, me = self.api.call("PUT", f"/flock/api/groups/{g['id']}/config",
+                              {"host": "flock.example.net", "port": 8883, "tls": True,
+                               "tracking_mode": "balanced"}, login=leader)
+        got = [x for x in me["groups"] if x["id"] == g["id"]][0]["config"]
+        self.assertEqual((got["standard"], got["tracking_mode"]), (True, "balanced"))
         self.api.call("PUT", f"/flock/api/groups/{g['id']}/config",
                       {"host": "elsewhere.example", "username": "u"}, login=leader)
         self.assertNotIn(f"user {leader['username']}\n", open(fs.ACL).read())
+
+
+class PlacesTest(unittest.TestCase):
+    """Shared places: anyone in the group adds them; the adder or the
+    leader removes them; only members see them."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.api = server()
+
+    def signup(self, name):
+        s, b = self.api.call("POST", "/flock/api/signup", {"name": name})
+        self.assertEqual(s, 201, b)
+        return b
+
+    def test_places(self):
+        leader = self.signup("Place Leader")
+        friend = self.signup("Place Friend")
+        other = self.signup("Place Stranger")
+        s, me = self.api.call("POST", "/flock/api/groups", {"name": "Placey"}, login=leader)
+        g = me["groups"][-1]
+        self.api.call("POST", "/flock/api/join", {"code": g["code"]}, login=friend)
+        self.api.call("POST", f"/flock/api/groups/{g['id']}/requests/{friend['username']}/approve", login=leader)
+
+        home = {"name": "  Mona   Vale Beach ", "lat": -33.677, "lon": 151.31, "radius": 150}
+        s, b = self.api.call("POST", f"/flock/api/groups/{g['id']}/places", home, login=other)
+        self.assertEqual(s, 403)  # not in the group
+        s, me = self.api.call("POST", f"/flock/api/groups/{g['id']}/places", home, login=friend)
+        self.assertEqual(s, 201, me)
+        places = [x for x in me["groups"] if x["id"] == g["id"]][0]["places"]
+        self.assertEqual([(p["name"], p["radius"]) for p in places], [("Mona Vale Beach", 150)])
+        pid = places[0]["id"]
+
+        _, lme = self.api.call("GET", "/flock/api/me", login=leader)
+        self.assertEqual(len(lme["groups"][-1]["places"]), 1)  # everyone sees it
+
+        s, b = self.api.call("POST", f"/flock/api/groups/{g['id']}/places",
+                             dict(home, radius=5), login=friend)
+        self.assertEqual(s, 400)
+        s, b = self.api.call("POST", f"/flock/api/groups/{g['id']}/places",
+                             {"name": "", "lat": 0, "lon": 0}, login=friend)
+        self.assertEqual(s, 400)
+
+        s, b = self.api.call("POST", f"/flock/api/groups/{g['id']}/places",
+                             {"name": "Leader's", "lat": 1, "lon": 1}, login=leader)
+        theirs = [p for p in b["groups"][-1]["places"] if p["name"] == "Leader's"][0]["id"]
+        s, b = self.api.call("DELETE", f"/flock/api/groups/{g['id']}/places/{theirs}", login=friend)
+        self.assertEqual(s, 403)  # not theirs, not the leader
+        s, b = self.api.call("DELETE", f"/flock/api/groups/{g['id']}/places/{pid}", login=leader)
+        self.assertEqual(s, 200)  # the leader can remove anyone's
+        self.assertEqual([p["name"] for p in b["groups"][-1]["places"]], ["Leader's"])
 
 
 class InviteTest(unittest.TestCase):

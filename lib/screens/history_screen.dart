@@ -47,6 +47,52 @@ List<int> historyDotIndices(List<LocationFix> fixes, {double minMeters = 25}) {
   return out;
 }
 
+/// Playback points: a stay (lots of reports from one spot) becomes a single
+/// point at its centre, timed from its first report, with when it ended.
+/// Everything else is kept as it is.
+@visibleForTesting
+({List<LocationFix> fixes, List<DateTime?> until}) collapseStays(
+  List<LocationFix> fixes,
+  List<Stay> stays,
+) {
+  final out = <LocationFix>[];
+  final until = <DateTime?>[];
+  var k = 0;
+  var i = 0;
+  while (i < fixes.length) {
+    final f = fixes[i];
+    while (k < stays.length && stays[k].end.isBefore(f.timestamp)) {
+      k++;
+    }
+    final stay = k < stays.length ? stays[k] : null;
+    if (stay == null || f.timestamp.isBefore(stay.start)) {
+      out.add(f);
+      until.add(null);
+      i++;
+      continue;
+    }
+    // Inside the stay: skip to its last report.
+    var j = i;
+    while (j + 1 < fixes.length && !fixes[j + 1].timestamp.isAfter(stay.end)) {
+      j++;
+    }
+    final last = fixes[j];
+    out.add(
+      LocationFix(
+        lat: stay.center.latitude,
+        lon: stay.center.longitude,
+        timestamp: stay.start,
+        battery: last.battery,
+        charging: last.charging,
+      ),
+    );
+    until.add(stay.end);
+    i = j + 1;
+    k++;
+  }
+  return (fixes: out, until: until);
+}
+
 /// The position at a fractional index, between two fixes.
 @visibleForTesting
 LatLng historyPositionAt(List<LocationFix> fixes, double pos) {
@@ -79,6 +125,9 @@ class _HistoryScreenState extends State<HistoryScreen>
   bool _loading = true;
   String? _error;
   List<LocationFix> _fixes = const [];
+
+  /// For points that are a stay: when it ended (else null).
+  List<DateTime?> _until = const [];
   List<int> _dots = const [];
   List<LatLng> _stops = const [];
 
@@ -122,19 +171,23 @@ class _HistoryScreenState extends State<HistoryScreen>
         end,
       );
       if (!mounted || req != _request) return;
+      final stays = buildTimeline(fixes).whereType<Stay>().toList();
+      final played = collapseStays(fixes, stays);
       setState(() {
-        _fixes = fixes;
-        _dots = historyDotIndices(fixes);
-        _stops = buildTimeline(fixes)
-            .whereType<Stay>()
-            .map((s) => s.center)
-            .toList();
+        _fixes = played.fixes;
+        _until = played.until;
+        _dots = {
+          ...historyDotIndices(played.fixes),
+          for (var i = 0; i < played.until.length; i++)
+            if (played.until[i] != null) i,
+        }.toList()..sort();
+        _stops = stays.map((s) => s.center).toList();
         // Start at the latest point: "where were they last?"
-        _pos = fixes.isEmpty ? 0 : (fixes.length - 1).toDouble();
+        _pos = played.fixes.isEmpty ? 0 : (played.fixes.length - 1).toDouble();
         _loading = false;
       });
       if (fixes.isNotEmpty) {
-        _map.fit(fixes.map((f) => f.latLng).toList());
+        _map.fit(played.fixes.map((f) => f.latLng).toList());
       }
     } on Object catch (e) {
       if (!mounted || req != _request) return;
@@ -142,6 +195,7 @@ class _HistoryScreenState extends State<HistoryScreen>
         _loading = false;
         _error = e.toString();
         _fixes = const [];
+        _until = const [];
         _dots = const [];
         _stops = const [];
       });
@@ -269,6 +323,8 @@ class _HistoryScreenState extends State<HistoryScreen>
               selectedNode: selectedDot < 0 ? null : selectedDot,
               onNodeTap: _jumpToDot,
               markStale: false,
+              floatingTopic: p.topic,
+              places: app.places,
               topInset: _topInset,
               bottomInset: _panelHeight + media.padding.bottom,
             ),
@@ -304,6 +360,8 @@ class _HistoryScreenState extends State<HistoryScreen>
             bottom: media.padding.bottom + 16,
             child: _Panel(
               fixes: _fixes,
+              until: _until,
+              ongoing: _dayOffset == 0,
               pos: _pos,
               moving: _stick != 0,
               color: color,
@@ -386,6 +444,8 @@ class _DayBar extends StatelessWidget {
 class _Panel extends StatelessWidget {
   const _Panel({
     required this.fixes,
+    required this.until,
+    required this.ongoing,
     required this.pos,
     required this.moving,
     required this.color,
@@ -394,6 +454,12 @@ class _Panel extends StatelessWidget {
   });
 
   final List<LocationFix> fixes;
+
+  /// When each stay ended (null for a point that isn't a stay).
+  final List<DateTime?> until;
+
+  /// Today: the last stay is still going.
+  final bool ongoing;
   final double pos;
   final bool moving;
   final Color color;
@@ -405,8 +471,18 @@ class _Panel extends StatelessWidget {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     final has = fixes.isNotEmpty;
-    final cur = has ? fixes[pos.round()] : null;
+    final i = has ? pos.round() : 0;
+    final cur = has ? fixes[i] : null;
+    final end = has && i < until.length ? until[i] : null;
     final fmt = DateFormat.jm();
+    final stayingNow = end != null && ongoing && i == fixes.length - 1;
+    final when = cur == null
+        ? '–'
+        : end == null
+        ? fmt.format(cur.timestamp)
+        : stayingNow
+        ? Txt.sinceTime(fmt.format(cur.timestamp))
+        : Txt.timeRange(fmt.format(cur.timestamp), fmt.format(end));
     final progress = fixes.length > 1 ? pos / (fixes.length - 1) : 0.0;
 
     return _Glass(
@@ -419,11 +495,30 @@ class _Panel extends StatelessWidget {
           children: [
             Row(
               children: [
-                Text(
-                  cur == null ? '–' : fmt.format(cur.timestamp),
-                  style: t.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                Expanded(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      when,
+                      style: t.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                      maxLines: 1,
+                    ),
+                  ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 8),
+                if (end != null)
+                  _Pill(
+                    icon: Icons.timer_outlined,
+                    text: formatDuration(
+                      (stayingNow ? DateTime.now() : end).difference(
+                        cur!.timestamp,
+                      ),
+                    ),
+                    color: color,
+                  ),
                 if (cur != null && (cur.velocityKmh ?? 0) >= 8)
                   _Pill(
                     icon: Icons.speed_rounded,
@@ -467,7 +562,12 @@ class _Panel extends StatelessWidget {
                 ),
                 const Spacer(),
                 Text(
-                  has ? fmt.format(fixes.last.timestamp) : '',
+                  has
+                      ? fmt.format(
+                          (until.isNotEmpty ? until.last : null) ??
+                              fixes.last.timestamp,
+                        )
+                      : '',
                   style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
               ],
@@ -502,9 +602,11 @@ class _Address extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.bodyMedium
         ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant);
-    final cached = AddressLookup.cached(fix.lat, fix.lon);
     Widget text(String s) =>
         Text(s, style: style, maxLines: 1, overflow: TextOverflow.ellipsis);
+    final place = context.read<AppState>().placeFor(fix.latLng);
+    if (place != null) return text(Txt.atPlace(place.name));
+    final cached = AddressLookup.cached(fix.lat, fix.lon);
     if (cached != null) return text(cached);
     if (moving) return text(timeAgo(fix.timestamp));
     return FutureBuilder<String?>(

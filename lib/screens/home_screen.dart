@@ -1,8 +1,10 @@
+import 'dart:async';
 // ignore_for_file: deprecated_member_use
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/person.dart';
@@ -12,6 +14,7 @@ import '../services/platform_services.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../util/format.dart';
+import '../util/timeline.dart';
 import '../widgets/avatar.dart';
 import '../widgets/family_map.dart';
 import 'groups_screen.dart';
@@ -64,10 +67,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused) app.onPause();
   }
 
+  StreamSubscription<PlaceEvent>? _placeSub;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // "Jack arrived at School"
+    _placeSub = context.read<AppState>().placeEvents.listen((e) {
+      if (!mounted) return;
+      final app = context.read<AppState>();
+      final who = app.isMe(e.person) ? Txt.youCap : e.person.name;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            e.arrived
+                ? Txt.arrivedAt(who, e.place.name)
+                : Txt.leftPlace(who, e.place.name),
+          ),
+        ),
+      );
+    });
     _sheet.addListener(() {
       if (!_sheet.isAttached) return;
       final s = _sheet.size;
@@ -89,6 +109,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _placeSub?.cancel();
     _sheet.dispose();
     super.dispose();
   }
@@ -147,6 +168,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               style: app.settings.mapStyle,
               controller: _map,
               people: people,
+              places: app.places,
               selectedTopic: _selected,
               onPersonTap: (p) => _select(p, moveMap: false),
               onMapTap: _clearSelection,
@@ -725,7 +747,7 @@ class _PersonRow extends StatelessWidget {
                       if (isMe) ...[
                         const SizedBox(width: 6),
                         Text(
-                          '(you)',
+                          Txt.youSuffix,
                           style: t.bodyMedium?.copyWith(
                             color: cs.onSurfaceVariant,
                           ),
@@ -763,6 +785,7 @@ class _PersonRow extends StatelessWidget {
   }
 }
 
+/// One of the group's places if they're in one, else the street address.
 class _AddressText extends StatelessWidget {
   const _AddressText({required this.fix, this.style, this.maxLines = 1});
   final LocationFix fix;
@@ -771,6 +794,15 @@ class _AddressText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final place = context.read<AppState>().placeFor(fix.latLng);
+    if (place != null) {
+      return Text(
+        Txt.atPlace(place.name),
+        style: style?.copyWith(fontWeight: FontWeight.w600),
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+      );
+    }
     final cached = AddressLookup.cached(fix.lat, fix.lon);
     return FutureBuilder<String?>(
       initialData: cached,
@@ -787,6 +819,57 @@ class _AddressText extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+/// "At Mona Vale Beach since 1:30 pm" once they've settled somewhere;
+/// otherwise just where they are.
+class _StayText extends StatelessWidget {
+  const _StayText({required this.person, required this.app, this.style});
+  final Person person;
+  final AppState app;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final fix = person.last!;
+    return FutureBuilder<Stay?>(
+      future: app.currentStay(person),
+      builder: (context, snap) {
+        final stay = snap.data;
+        if (stay == null) {
+          return _AddressText(fix: fix, style: style, maxLines: 2);
+        }
+        final since = _sinceLabel(stay.start);
+        final place = app.placeFor(fix.latLng) ?? app.placeFor(stay.center);
+        Widget say(String where) => Text(
+          Txt.atPlaceSince(where, since),
+          style: style,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        );
+        if (place != null) return say(place.name);
+        final cached = AddressLookup.cached(fix.lat, fix.lon);
+        if (cached != null) return say(cached);
+        return FutureBuilder<String?>(
+          future: AddressLookup.lookup(fix.lat, fix.lon),
+          builder: (context, a) => a.data == null
+              ? _AddressText(fix: fix, style: style, maxLines: 2)
+              : say(a.data!),
+        );
+      },
+    );
+  }
+
+  /// "3:12 pm" today, "yesterday 9:40 pm", or "Tue 8:00 am".
+  static String _sinceLabel(DateTime t) {
+    final now = DateTime.now();
+    final day = DateTime(t.year, t.month, t.day);
+    final today = DateTime(now.year, now.month, now.day);
+    final time = DateFormat.jm().format(t);
+    if (day == today) return time;
+    if (today.difference(day).inDays == 1) return Txt.yesterdayAt(time);
+    return '${DateFormat.E().format(t)} $time';
   }
 }
 
@@ -908,10 +991,10 @@ class _PersonDetail extends StatelessWidget {
                     Icon(Icons.place_rounded, color: color),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: _AddressText(
-                        fix: fix,
+                      child: _StayText(
+                        person: person,
+                        app: app,
                         style: t.bodyLarge,
-                        maxLines: 2,
                       ),
                     ),
                     if ((fix.velocityKmh ?? 0) >= 8)

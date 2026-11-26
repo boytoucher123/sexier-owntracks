@@ -1,6 +1,7 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flock/models/person.dart';
 import 'package:flock/screens/history_screen.dart';
+import 'package:flock/util/timeline.dart';
 import 'package:flock/widgets/history_joystick.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +13,36 @@ LocationFix _fix(double lat, double lon, int minute) => LocationFix(
 );
 
 void main() {
+  group('stays', () {
+    test('lots of reports from one spot play back as one stop', () {
+      final fixes = [
+        _fix(-33.8000, 151.2000, 0), // on the way
+        _fix(-33.8100, 151.2000, 2),
+        for (var m = 5; m <= 40; m += 1)
+          _fix(-33.82 + (m % 3) * 0.00002, 151.2, m), // at the beach
+        _fix(-33.8300, 151.2000, 45), // leaving
+        _fix(-33.8400, 151.2000, 48),
+      ];
+      final stays = buildTimeline(fixes).whereType<Stay>().toList();
+      expect(stays, hasLength(1));
+      final played = collapseStays(fixes, stays);
+      // 2 before + 1 stay + 2 after, instead of 40 points.
+      expect(played.fixes, hasLength(5));
+      expect(played.until.where((u) => u != null), hasLength(1));
+      final i = played.until.indexWhere((u) => u != null);
+      expect(played.fixes[i].timestamp, DateTime(2026, 11, 25, 9, 5));
+      expect(played.until[i], DateTime(2026, 11, 25, 9, 40));
+      expect(played.fixes[i].lat, closeTo(-33.82, 0.0001));
+    });
+
+    test('no stays: nothing changes', () {
+      final fixes = [_fix(-33.80, 151.2, 0), _fix(-33.81, 151.2, 1)];
+      final played = collapseStays(fixes, const []);
+      expect(played.fixes, fixes);
+      expect(played.until, [null, null]);
+    });
+  });
+
   group('history playback', () {
     test(
       'joystick speed: still in the middle, gentle near it, fast at the edge',

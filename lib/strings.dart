@@ -39,21 +39,20 @@ abstract final class Txt {
   static const setUpTheServerFirst = 'Set up the server first.';
   static const server = 'Server';
   static const runsOnThisAppS =
-      'Runs on the server your accounts are on. Everyone uses their own '
-      'login, and history is included. Nothing to set up.';
-  static const useYourOwnServerInstead = 'Use your own server instead';
+      'Runs on the server your accounts are on. Everyone signs in with '
+      'their own account, and history is included.';
+  static const runsOnYourOwnServer =
+      'Runs on your own server. Everyone signs in with their own Flock '
+      'account, so that server needs the same accounts.';
   static const newGroupsBringTheirOwn =
-      'New groups bring their own server: an MQTT broker '
-      '(like Mosquitto) that everyone\'s phone can reach. The '
-      'whole group shares the one login below; the app keeps '
-      'people apart by name. Until you add it, nobody in the '
+      'New groups bring their own server: an MQTT broker (like '
+      'Mosquitto) that everyone\'s phone can reach, where each person '
+      'signs in with their own account. Until you add it, nobody in the '
       'group can share their location.';
   static const serverAddress = 'Server address';
   static const eGMqttExampleCom = 'e.g. mqtt.example.com';
   static const port = 'Port';
   static const secureTls = 'Secure (TLS)';
-  static const groupLoginUsername = 'Group login: username';
-  static const groupLoginPassword = 'Group login: password';
   static const historyAddressOptional = 'History address (optional)';
   static const moreOptions = 'More options';
   static const topicPrefix = 'Topic prefix';
@@ -509,4 +508,35 @@ abstract final class Txt {
   static const changeGroupDefault = 'Change the group default';
   static const showGroup = 'Show group';
   static String liveIn(Object? status, Object? group) => '$status · $group';
+
+  // ---- Stays (lots of reports from one spot shown as one) -------------------
+  static String timeRange(Object? from, Object? to) => '$from – $to';
+  static String sinceTime(Object? time) => 'Since $time';
+  static String atPlaceSince(Object? place, Object? time) =>
+      'At $place since $time';
+  static String atPlace(Object? place) => 'At $place';
+  static String yesterdayAt(Object? time) => 'yesterday $time';
+  static const youSuffix = '(you)';
+  static const youCap = 'You';
+  static String arrivedAt(Object? who, Object? place) =>
+      '$who arrived at $place';
+  static String leftPlace(Object? who, Object? place) => '$who left $place';
+
+  // ---- Places (shared per group) ---------------------------------------------
+  static const placesTitle = 'Places';
+  static const noPlacesYet =
+      'Add places like Home or School to see "At School since 3 pm".';
+  static String placeSize(Object? size) => 'Size: $size across';
+  static const removePlace = 'Remove place';
+  static String removePlaceQ(Object? name) => 'Remove $name?';
+  static const removePlaceBody =
+      'It goes for everyone in the group. History isn\'t affected.';
+  static const removeButton = 'Remove';
+  static const addAPlace = 'Add a place';
+  static String addPlaceTo(Object? group) => 'New place in $group';
+  static const newPlace = 'New place';
+  static const movePinHint = 'Move the map so the pin is on the place.';
+  static const placeName = 'Name';
+  static const placeNameHint = 'e.g. Home, School, Mona Vale Beach';
+  static const savePlace = 'Save place';
 }
