@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flock/config/server_config.dart';
 import 'package:flock/models/settings.dart';
 import 'package:flock/services/owntracks_protocol.dart';
 import 'package:flock/services/recorder_service.dart';
@@ -155,14 +154,18 @@ void main() {
     });
 
     test('everyone publishes as owntracks/<their username>/phone', () {
-      const s = AppSettings(username: 'maya-chen', password: 'p');
+      const s = AppSettings(
+        username: 'maya-chen',
+        password: 'p',
+        accountServer: 'flock.example.net:8443',
+      );
       expect(s.ownTopic, 'owntracks/maya-chen/phone');
       expect(s.hasAccount, isTrue);
     });
 
-    test('the old shared login, or no login, is not an account', () {
+    test('a login without a server is not an account', () {
       expect(
-        const AppSettings(username: 'class_of_2024', password: 'p').hasAccount,
+        const AppSettings(username: 'someone', password: 'p').hasAccount,
         isFalse,
       );
       expect(const AppSettings().hasAccount, isFalse);
@@ -191,19 +194,14 @@ void main() {
       expect(back.mapProvider, MapProvider.google);
     });
 
-    test(
-      'history is set up by default, including for older saved settings',
-      () {
-        expect(const AppSettings().recorderUrl, kDefaultRecorderUrl);
-        expect(const AppSettings().hasRecorder, isTrue);
-        final old = AppSettings.fromJson({'host': 'h', 'recorderUrl': ''});
-        expect(old.recorderUrl, kDefaultRecorderUrl);
-        final custom = AppSettings.fromJson({
-          'recorderUrl': 'https://x.example',
-        });
-        expect(custom.recorderUrl, 'https://x.example');
-      },
-    );
+    test('nothing about a server is built in', () {
+      const s = AppSettings();
+      expect(
+        (s.host, s.recorderUrl, s.caPem, s.accountServer),
+        ('', '', '', ''),
+      );
+      expect(s.hasRecorder, isFalse);
+    });
   });
 
   group('host input', () {

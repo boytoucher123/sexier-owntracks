@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../models/settings.dart';
+import '../strings.dart';
 
 enum LocationAccess {
   /// We haven't asked yet, or the user dismissed the prompt.
@@ -173,9 +174,9 @@ class LocationService {
         distanceFilter: distance,
         intervalDuration: interval,
         foregroundNotificationConfig: const ForegroundNotificationConfig(
-          notificationTitle: 'Sharing your location',
-          notificationText: 'Your friends can see where you are.',
-          notificationChannelName: 'Location sharing',
+          notificationTitle: Txt.sharingYourLocation,
+          notificationText: Txt.yourFriendsCanSeeWhere2,
+          notificationChannelName: Txt.locationSharing,
           setOngoing: true,
           enableWakeLock: false,
         ),

@@ -21,7 +21,17 @@ os.environ.update(
     FLOCK_ACL=os.path.join(TMP, "acl"),
     FLOCK_DB=os.path.join(TMP, "flock.db"),
     FLOCK_RELOAD="0",
+    FLOCK_SERVER_CONF=os.path.join(TMP, "server.json"),
 )
+TEST_CA = """-----BEGIN CERTIFICATE-----
+MIIBszCCAVmgAwIBAgIUQ2xUb2NrVGVzdENBMDAwMDAwMDAwMDAwCgYIKoZIzj0EAwIw
+-----END CERTIFICATE-----
+"""
+with open(os.path.join(TMP, "ca.crt"), "w") as _f:
+    _f.write(TEST_CA)
+with open(os.environ["FLOCK_SERVER_CONF"], "w") as _f:
+    json.dump({"public_host": "flock.example.net", "api_port": 8443,
+               "mqtt_port": 8883, "ca_file": os.path.join(TMP, "ca.crt")}, _f)
 _loader = importlib.machinery.SourceFileLoader("flock_server", os.path.join(HERE, "flock-server"))
 _spec = importlib.util.spec_from_loader("flock_server", _loader)
 fs = importlib.util.module_from_spec(_spec)
@@ -346,10 +356,51 @@ class GroupConfigTest(unittest.TestCase):
         self.assertIn(f"user {leader['username']}\n", open(fs.ACL).read())
         s, me = self.api.call("PUT", f"/flock/api/groups/{g['id']}/config", {"tracking_mode": "precise"}, login=leader)
         got = [x for x in me["groups"] if x["id"] == g["id"]][0]["config"]
-        self.assertEqual(got, {"standard": True, "tracking_mode": "precise"})
+        self.assertEqual((got["standard"], got["tracking_mode"]), (True, "precise"))
+        stored = json.loads(fs.db().execute("SELECT config FROM groups WHERE id=?", (g["id"],)).fetchone()[0])
+        self.assertEqual(stored, {"standard": True, "tracking_mode": "precise"})  # no address frozen in
         self.api.call("PUT", f"/flock/api/groups/{g['id']}/config",
                       {"host": "elsewhere.example", "username": "u"}, login=leader)
         self.assertNotIn(f"user {leader['username']}\n", open(fs.ACL).read())
+
+
+class InviteTest(unittest.TestCase):
+    """The app knows no server: invites and standard groups tell it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.api = server()
+
+    def test_ca_is_served_and_invites_pin_it(self):
+        s, b = self.api.call("GET", "/flock/api/ca")
+        self.assertEqual((s, b["pem"]), (200, TEST_CA))
+        fs._signups_ip.clear()
+        _, leader = self.api.call("POST", "/flock/api/signup", {"name": "Invite Leader"}, ip="10.8.0.1")
+        _, me = self.api.call("POST", "/flock/api/groups", {"name": "Inv"}, login=leader)
+        g = me["groups"][0]
+        fp = fs.ca_fingerprint(TEST_CA)
+        self.assertEqual(g["invite"], f"https://flock.example.net:8443/flock/join/{g['code']}?ca={fp}")
+        self.assertEqual(len(fp), 43)
+
+        # The link's page opens Flock with the same invite.
+        import urllib.request
+        with urllib.request.urlopen(f"{self.api.base}/flock/join/{g['code']}") as r:
+            page = r.read().decode()
+            self.assertEqual(r.headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn(f'href="flock://flock.example.net:8443/join/{g["code"]}?ca={fp}"', page)
+        self.assertIn(g["code"], page)
+
+    def test_standard_groups_carry_this_servers_details(self):
+        fs._signups_ip.clear()
+        _, leader = self.api.call("POST", "/flock/api/signup", {"name": "Std Details"}, ip="10.8.0.2")
+        _, me = self.api.call("POST", "/flock/api/groups", {"name": "StdD"}, login=leader)
+        fs.set_standard(me["groups"][0]["id"])
+        _, me = self.api.call("GET", "/flock/api/me", login=leader)
+        c = me["groups"][0]["config"]
+        self.assertEqual(
+            (c["standard"], c["host"], c["port"], c["ca"], c["recorder_url"], c["topic_prefix"]),
+            (True, "flock.example.net", 8883, TEST_CA, "https://flock.example.net:8443", "owntracks"),
+        )
 
 
 class MigrationTest(unittest.TestCase):

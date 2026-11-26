@@ -68,8 +68,8 @@ Messages use the standard OwnTracks JSON format.
 
 ## Server requirements
 
-> This build is set up for one server: its address, port and private CA
-> certificate are built in. See [docs/SERVER.md](docs/SERVER.md).
+> No server is built in. A group's invite tells the app which server to use
+> and which certificate to trust. See [docs/SERVER.md](docs/SERVER.md).
 
 - **Mosquitto** with a password file and an ACL file, both managed by
   **flock-server** (in [`server/`](server/), Python standard library only). It

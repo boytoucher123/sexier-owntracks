@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../models/settings.dart';
 import '../services/mqtt_service.dart';
 import '../theme.dart';
+import '../strings.dart';
 
 /// What the user typed in the server box, split into its parts.
 class ParsedHost {
@@ -202,8 +203,8 @@ class _ConnectionFormState extends State<ConnectionForm> {
           autocorrect: false,
           textInputAction: TextInputAction.next,
           decoration: const InputDecoration(
-            labelText: 'Server address',
-            hintText: 'e.g. tracking.example.com',
+            labelText: Txt.serverAddress,
+            hintText: Txt.eGTrackingExampleCom,
             prefixIcon: Icon(Icons.dns_rounded),
           ),
           onChanged: _onHostChanged,
@@ -214,8 +215,8 @@ class _ConnectionFormState extends State<ConnectionForm> {
           autocorrect: false,
           textInputAction: TextInputAction.next,
           decoration: const InputDecoration(
-            labelText: 'Username',
-            hintText: 'The login your group shares',
+            labelText: Txt.username,
+            hintText: Txt.theLoginYourGroupShares,
             prefixIcon: Icon(Icons.person_rounded),
           ),
           onChanged: (_) => _changed(),
@@ -228,7 +229,7 @@ class _ConnectionFormState extends State<ConnectionForm> {
           enableSuggestions: false,
           textInputAction: TextInputAction.done,
           decoration: InputDecoration(
-            labelText: 'Password',
+            labelText: Txt.password,
             prefixIcon: const Icon(Icons.lock_rounded),
             suffixIcon: IconButton(
               icon: Icon(
@@ -245,8 +246,8 @@ class _ConnectionFormState extends State<ConnectionForm> {
         const SizedBox(height: 4),
         SwitchListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-          title: const Text('Secure connection'),
-          subtitle: const Text('Leave on unless your server says otherwise'),
+          title: const Text(Txt.secureConnection),
+          subtitle: const Text(Txt.leaveOnUnlessYourServer),
           value: _tls,
           onChanged: _onTlsChanged,
         ),
@@ -256,14 +257,14 @@ class _ConnectionFormState extends State<ConnectionForm> {
             tilePadding: const EdgeInsets.symmetric(horizontal: 4),
             childrenPadding: const EdgeInsets.only(bottom: 8),
             title: Text(
-              'More options',
+              Txt.moreOptions,
               style: TextStyle(color: cs.onSurfaceVariant, fontSize: 15),
             ),
             children: [
               TextField(
                 controller: _port,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Port'),
+                decoration: const InputDecoration(labelText: Txt.port),
                 onChanged: (_) {
                   _portTouched = true;
                   _changed();
@@ -274,14 +275,14 @@ class _ConnectionFormState extends State<ConnectionForm> {
                 controller: _topic,
                 autocorrect: false,
                 decoration: const InputDecoration(
-                  labelText: 'Topic prefix',
-                  helperText: 'Almost always "owntracks"',
+                  labelText: Txt.topicPrefix,
+                  helperText: Txt.almostAlwaysOwntracks,
                 ),
                 onChanged: (_) => _changed(),
               ),
               SwitchListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                title: const Text('Connect over WebSockets'),
+                title: const Text(Txt.connectOverWebsockets),
                 value: _ws,
                 onChanged: (v) {
                   _ws = v;
@@ -295,8 +296,8 @@ class _ConnectionFormState extends State<ConnectionForm> {
               ),
               SwitchListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                title: const Text('Allow self-signed certificate'),
-                subtitle: const Text('Only if you run your own certificates'),
+                title: const Text(Txt.allowSelfSignedCertificate),
+                subtitle: const Text(Txt.onlyIfYouRunYour),
                 value: _untrusted,
                 onChanged: (v) {
                   _untrusted = v;
@@ -316,7 +317,7 @@ class _ConnectionFormState extends State<ConnectionForm> {
                   child: CircularProgressIndicator(strokeWidth: 2.5),
                 )
               : const Icon(Icons.wifi_tethering_rounded),
-          label: Text(_testing ? 'Testing…' : 'Test connection'),
+          label: Text(_testing ? Txt.testing : Txt.testConnection),
         ),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 250),
@@ -378,7 +379,7 @@ class _ResultCard extends StatelessWidget {
             FilledButton.icon(
               onPressed: () => onUseSuggestion(fix),
               icon: const Icon(Icons.auto_fix_high_rounded),
-              label: const Text('Use these settings'),
+              label: const Text(Txt.useTheseSettings),
             ),
           ],
         ],

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../models/person.dart';
 import '../theme.dart';
+import '../strings.dart';
 
 /// Round photo, or coloured initials when there's no photo.
 class Avatar extends StatelessWidget {
@@ -57,7 +58,7 @@ class Avatar extends StatelessWidget {
     if (!enlargeable || face == null) return a;
     return Semantics(
       button: true,
-      label: 'Show photo',
+      label: Txt.showPhoto,
       child: GestureDetector(
         onTap: () => showPhotoViewer(context, face!, title: label),
         child: Hero(tag: face!, child: a),

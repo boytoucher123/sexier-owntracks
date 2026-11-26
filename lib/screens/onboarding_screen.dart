@@ -12,8 +12,9 @@ import '../theme.dart';
 import '../widgets/avatar.dart';
 import 'groups_screen.dart';
 import 'photo_crop_screen.dart';
+import '../strings.dart';
 
-/// Welcome → You (makes your account) → Group → Location → done.
+/// Welcome → You → Join (an invite makes your account) → Location → done.
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -62,13 +63,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
-  /// Makes your account the first time; after that just saves name changes.
+  /// Saves your name and initials. Your account is made when you join a
+  /// group with an invite (that's how the app learns about the server).
   Future<String?> _saveYou() async {
     final app = context.read<AppState>();
-    if (!app.settings.hasAccount) {
-      final err = await app.createAccount(_draft.displayName);
-      if (err != null) return err;
-    }
     await app.updateSettings(
       app.settings.copyWith(
         displayName: _draft.displayName,
@@ -227,19 +225,18 @@ class _WelcomePage extends StatelessWidget {
           const _HeroCluster(),
           const SizedBox(height: 40),
           Text(
-            'Stay close to\nyour people',
+            Txt.stayCloseToYourPeople,
             textAlign: TextAlign.center,
             style: t.headlineLarge,
           ),
           const SizedBox(height: 12),
           Text(
-            'See where your friends are, check they got home safe, and look back '
-            'at their day. On your own server, so it stays private.',
+            Txt.seeWhereYourFriendsAre,
             textAlign: TextAlign.center,
             style: t.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
           ),
           const Spacer(),
-          FilledButton(onPressed: onNext, child: const Text('Get started')),
+          FilledButton(onPressed: onNext, child: const Text(Txt.getStarted)),
         ],
       ),
     );
@@ -391,17 +388,14 @@ class _YouPageState extends State<_YouPage> {
     final cs = Theme.of(context).colorScheme;
     final ready =
         _name.text.trim().isNotEmpty && _tid.text.trim().isNotEmpty && !_saving;
-    final hasAccount = context.watch<AppState>().settings.hasAccount;
     final initials = _tid.text.trim().isEmpty
         ? '?'
         : _tid.text.trim().toUpperCase();
 
     return _PageScaffold(
       icon: Icons.face_rounded,
-      title: 'Who are you?',
-      subtitle:
-          'This is how you\'ll appear to everyone else. Use your real name '
-          'so your group leader knows it\'s you.',
+      title: Txt.whoAreYou,
+      subtitle: Txt.thisIsHowYouLl,
       primary: FilledButton(
         onPressed: ready ? _save : null,
         child: _saving
@@ -410,7 +404,7 @@ class _YouPageState extends State<_YouPage> {
                 height: 20,
                 child: CircularProgressIndicator(strokeWidth: 2.5),
               )
-            : Text(hasAccount ? 'Continue' : 'Create my account'),
+            : const Text(Txt.continueButton),
       ),
       children: [
         Center(
@@ -449,7 +443,7 @@ class _YouPageState extends State<_YouPage> {
         Center(
           child: TextButton(
             onPressed: () => _photoSheet(context),
-            child: Text(widget.photo == null ? 'Add a photo' : 'Change photo'),
+            child: Text(widget.photo == null ? Txt.addAPhoto : Txt.changePhoto),
           ),
         ),
         const SizedBox(height: 12),
@@ -457,8 +451,8 @@ class _YouPageState extends State<_YouPage> {
           controller: _name,
           textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(
-            labelText: 'Your name',
-            hintText: 'e.g. Fred Durk',
+            labelText: Txt.yourName,
+            hintText: Txt.eGFredDurk,
             prefixIcon: Icon(Icons.badge_rounded),
           ),
           onChanged: _onName,
@@ -469,8 +463,8 @@ class _YouPageState extends State<_YouPage> {
           maxLength: 2,
           textCapitalization: TextCapitalization.characters,
           decoration: const InputDecoration(
-            labelText: 'Initials',
-            helperText: 'Shown on the map when there\'s no photo',
+            labelText: Txt.initials,
+            helperText: Txt.shownOnTheMapWhen,
             counterText: '',
           ),
           onChanged: (_) {
@@ -502,7 +496,7 @@ class _YouPageState extends State<_YouPage> {
           children: [
             ListTile(
               leading: const Icon(Icons.photo_camera_rounded),
-              title: const Text('Take a photo'),
+              title: const Text(Txt.takeAPhoto),
               onTap: () {
                 Navigator.pop(ctx);
                 _pick(ImageSource.camera);
@@ -510,7 +504,7 @@ class _YouPageState extends State<_YouPage> {
             ),
             ListTile(
               leading: const Icon(Icons.photo_library_rounded),
-              title: const Text('Choose from library'),
+              title: const Text(Txt.chooseFromLibrary),
               onTap: () {
                 Navigator.pop(ctx);
                 _pick(ImageSource.gallery);
@@ -519,7 +513,7 @@ class _YouPageState extends State<_YouPage> {
             if (widget.photo != null)
               ListTile(
                 leading: const Icon(Icons.delete_outline_rounded),
-                title: const Text('Remove photo'),
+                title: const Text(Txt.removePhoto),
                 onTap: () {
                   Navigator.pop(ctx);
                   widget.onPhoto(null);
@@ -548,13 +542,11 @@ class _GroupPage extends StatelessWidget {
         a != null && (a.groups.isNotEmpty || a.pending.isNotEmpty);
     return _PageScaffold(
       icon: Icons.groups_rounded,
-      title: 'Your group',
-      subtitle:
-          'You see the people in your groups, and they see you. Nobody else '
-          'can. Start one and share its code, or enter a code someone sent you.',
+      title: Txt.joinYourGroup,
+      subtitle: Txt.pasteTheInviteYourGroup,
       primary: FilledButton(
-        onPressed: onNext,
-        child: Text(inSomething ? 'Continue' : 'Skip for now'),
+        onPressed: inSomething ? onNext : null,
+        child: const Text(Txt.continueButton),
       ),
       children: [
         if (a != null) ...[
@@ -562,19 +554,12 @@ class _GroupPage extends StatelessWidget {
           for (final p in a.pending) PendingCard(pending: p),
         ],
         if (!inSomething) ...[
-          Text('Got a code?', style: t.titleMedium),
-          const SizedBox(height: 8),
           const JoinGroupForm(),
-          const SizedBox(height: 28),
-          Text('Or start a new group', style: t.titleMedium),
-          const SizedBox(height: 4),
+          const SizedBox(height: 16),
           Text(
-            'You\'ll be its leader: you get a code to share and decide who '
-            'gets in.',
+            Txt.noInviteAskThePerson,
             style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
           ),
-          const SizedBox(height: 8),
-          const CreateGroupForm(),
         ],
       ],
     );
@@ -642,38 +627,35 @@ class _LocationPageState extends State<_LocationPage>
       String? action,
       VoidCallback? onAction,
     ) = switch (a) {
-      null => ('Share your location', '', null, null),
+      null => (Txt.shareYourLocation, '', null, null),
       LocationAccess.notAsked => (
-        'Share your location',
-        'Your friends see you on the map only when you allow location access.',
-        'Allow location',
+        Txt.shareYourLocation,
+        Txt.yourFriendsSeeYouOn,
+        Txt.allowLocation,
         _request,
       ),
       LocationAccess.whileUsing => (
-        'One more thing',
-        'Choose "Allow all the time" so your friends can still see you when the '
-            'app is closed. Without it, your dot only moves while the app is open.',
-        'Allow all the time',
+        Txt.oneMoreThing,
+        Txt.chooseAllowAllTheTime,
+        Txt.allowAllTheTime,
         _request,
       ),
       LocationAccess.always => (
-        'You\'re all set',
-        'Your location will be shared in the background. You can pause sharing '
-            'any time from Settings.',
+        Txt.youReAllSet,
+        Txt.yourLocationWillBeShared,
         null,
         null,
       ),
       LocationAccess.denied => (
-        'Location is blocked',
-        'Location access was turned off for this app. Open Settings and allow '
-            'location "All the time".',
-        'Open Settings',
+        Txt.locationIsBlocked,
+        Txt.locationAccessWasTurnedOff,
+        Txt.openSettings,
         () => loc.openSettings(),
       ),
       LocationAccess.servicesOff => (
-        'Location is off',
-        'Location services are turned off on this phone.',
-        'Turn on location',
+        Txt.locationIsOff,
+        Txt.locationServicesAreTurnedOff,
+        Txt.turnOnLocation,
         () => loc.openLocationSettings(),
       ),
     };
@@ -695,25 +677,25 @@ class _LocationPageState extends State<_LocationPage>
                         color: Colors.white,
                       ),
                     )
-                  : const Text('Start'),
+                  : const Text(Txt.start),
             )
           : FilledButton(onPressed: onAction, child: Text(action)),
       secondary: done || action == null
           ? null
           : TextButton(
               onPressed: widget.finishing ? null : widget.onFinish,
-              child: const Text('Not now'),
+              child: const Text(Txt.notNow),
             ),
       children: [
         _PermissionStep(
           n: 1,
-          text: 'Allow location while using the app',
+          text: Txt.allowLocationWhileUsingThe,
           done: a == LocationAccess.whileUsing || a == LocationAccess.always,
         ),
         const SizedBox(height: 10),
         _PermissionStep(
           n: 2,
-          text: 'Allow all the time, for background updates',
+          text: Txt.allowAllTheTimeFor,
           done: a == LocationAccess.always,
         ),
       ],

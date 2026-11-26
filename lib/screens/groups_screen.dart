@@ -12,6 +12,7 @@ import '../theme.dart';
 import '../util/format.dart';
 import '../widgets/avatar.dart';
 import 'group_settings_screen.dart';
+import '../strings.dart';
 
 /// Your groups: who's in them, invite codes, and people asking to join.
 class GroupsScreen extends StatefulWidget {
@@ -34,7 +35,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final a = app.account;
     final t = Theme.of(context).textTheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Groups')),
+      appBar: AppBar(title: const Text(Txt.groups)),
       body: RefreshIndicator(
         onRefresh: app.refreshAccount,
         child: ListView(
@@ -51,18 +52,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
               for (final g in a.groups) GroupCard(group: g),
               for (final p in a.pending) PendingCard(pending: p),
               if (a.groups.isEmpty && a.pending.isEmpty)
-                const _Note(
-                  icon: Icons.groups_rounded,
-                  text:
-                      'You\'re not in a group yet. Start one and share its '
-                      'code, or ask someone for theirs.',
-                ),
+                const _Note(icon: Icons.groups_rounded, text: Txt.youReNotInA),
               const SizedBox(height: 16),
-              Text('Join a group', style: t.titleMedium),
+              Text(Txt.joinAGroup, style: t.titleMedium),
               const SizedBox(height: 8),
               const JoinGroupForm(),
               const SizedBox(height: 24),
-              Text('Start a group', style: t.titleMedium),
+              Text(Txt.startAGroup, style: t.titleMedium),
               const SizedBox(height: 8),
               const CreateGroupForm(),
             ],
@@ -101,14 +97,14 @@ class GroupCard extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.only(right: 4),
                     child: Chip(
-                      label: const Text('Leader'),
+                      label: const Text(Txt.leader),
                       visualDensity: VisualDensity.compact,
                       backgroundColor: cs.primary.withOpacity(0.1),
                       side: BorderSide.none,
                     ),
                   ),
                 PopupMenuButton<String>(
-                  tooltip: 'Group options',
+                  tooltip: Txt.groupOptions,
                   onSelected: (v) async {
                     if (v == 'rename') {
                       await _rename(context, app, g);
@@ -120,11 +116,11 @@ class GroupCard extends StatelessWidget {
                     if (g.isLeader)
                       const PopupMenuItem(
                         value: 'rename',
-                        child: Text('Rename group'),
+                        child: Text(Txt.renameGroup),
                       ),
                     const PopupMenuItem(
                       value: 'leave',
-                      child: Text('Leave group'),
+                      child: Text(Txt.leaveGroup),
                     ),
                   ],
                 ),
@@ -142,15 +138,15 @@ class GroupCard extends StatelessWidget {
               const SizedBox(height: 16),
               Text(
                 g.requests.length == 1
-                    ? '1 person wants to join'
-                    : '${g.requests.length} people want to join',
+                    ? Txt.n1PersonWantsToJoin
+                    : Txt.peopleWantToJoin(g.requests.length),
                 style: t.titleSmall?.copyWith(color: FlockColors.warning),
               ),
               for (final r in g.requests) _RequestTile(group: g, request: r),
             ],
             const SizedBox(height: 12),
             Text(
-              '${g.members.length} ${g.members.length == 1 ? 'member' : 'members'}',
+              Txt.memberCount(g.members.length),
               style: t.titleSmall?.copyWith(color: cs.onSurfaceVariant),
             ),
             for (final m in g.members) _MemberTile(group: g, member: m),
@@ -167,8 +163,8 @@ class GroupCard extends StatelessWidget {
   ) async {
     final name = await _askText(
       context,
-      title: 'Rename group',
-      label: 'Group name',
+      title: Txt.renameGroup,
+      label: Txt.groupName,
       initial: g.name,
     );
     if (name == null || name.trim().isEmpty || !context.mounted) return;
@@ -185,14 +181,13 @@ class GroupCard extends StatelessWidget {
     final others = g.members.length > 1;
     final ok = await _confirm(
       context,
-      title: 'Leave ${g.name}?',
+      title: Txt.leave(g.name),
       text: g.isLeader && others
-          ? 'You\'ll stop seeing everyone in it, and they\'ll stop seeing '
-                'you. The longest-standing member becomes the leader.'
+          ? Txt.youLlStopSeeingEveryone
           : g.isLeader
-          ? 'You\'re the only one in it, so the group will be deleted.'
-          : 'You\'ll stop seeing everyone in it, and they\'ll stop seeing you.',
-      action: 'Leave',
+          ? Txt.youReTheOnlyOne
+          : Txt.youLlStopSeeingEveryone2,
+      action: Txt.leave2,
     );
     if (!ok || !context.mounted) return;
     final err = await app.leaveGroup(g);
@@ -235,29 +230,27 @@ class _GroupSetup extends StatelessWidget {
             Expanded(
               child: Text(
                 g.isLeader
-                    ? 'Not set up yet. Add a server so the group can share '
-                          'locations.'
-                    : 'Waiting for ${g.leaderName} to set up a server for the '
-                          'group.',
+                    ? Txt.notSetUpYetAdd
+                    : Txt.waitingForToSetUp(g.leaderName),
               ),
             ),
             if (g.isLeader)
-              TextButton(onPressed: open, child: const Text('Set up')),
+              TextButton(onPressed: open, child: const Text(Txt.setUp)),
           ],
         ),
       );
     } else {
-      final server = c.standard ? 'This app\'s server' : c.host;
+      final server = c.host.isEmpty ? Txt.unknownServer : c.host;
       info = ListTile(
         contentPadding: const EdgeInsets.only(right: 4),
         leading: Icon(Icons.tune_rounded, color: cs.primary),
-        title: Text('Tracking: ${c.trackingMode.label}'),
+        title: Text(Txt.tracking2(c.trackingMode.label)),
         subtitle: Text(
-          'Server: $server',
+          Txt.server2(server),
           style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
         ),
         trailing: g.isLeader
-            ? TextButton(onPressed: open, child: const Text('Settings'))
+            ? TextButton(onPressed: open, child: const Text(Txt.settings2))
             : null,
       );
     }
@@ -271,7 +264,7 @@ class _GroupSetup extends StatelessWidget {
             child: active
                 ? Chip(
                     avatar: const Icon(Icons.map_rounded, size: 18),
-                    label: const Text('On your map now'),
+                    label: const Text(Txt.onYourMapNow),
                     side: BorderSide.none,
                     backgroundColor: cs.primary.withOpacity(0.1),
                   )
@@ -281,7 +274,7 @@ class _GroupSetup extends StatelessWidget {
                     ),
                     onPressed: () => app.setActiveGroup(g),
                     icon: const Icon(Icons.map_outlined),
-                    label: const Text('Show this group on my map'),
+                    label: const Text(Txt.showThisGroupOnMy),
                   ),
           ),
       ],
@@ -312,10 +305,7 @@ class PendingCard extends StatelessWidget {
                 children: [
                   Text(pending.name, style: t.titleMedium),
                   const SizedBox(height: 2),
-                  Text(
-                    'Waiting for ${pending.leaderName} to let you in. '
-                    'Let them know it\'s you.',
-                  ),
+                  Text(Txt.waitingForToLetYou(pending.leaderName)),
                 ],
               ),
             ),
@@ -331,9 +321,9 @@ class InviteCodeCard extends StatelessWidget {
   const InviteCodeCard({super.key, required this.group});
   final Group group;
 
+  /// The message a leader sends. Paste it whole into Flock's Invite box.
   static String shareText(Group g) =>
-      'Join "${g.name}" on Flock: open Flock, go to Groups → Join a group, '
-      'and enter the code ${g.code}';
+      Txt.joinOnFlockInstallFlock(g.name, g.invite ?? g.code);
 
   @override
   Widget build(BuildContext context) {
@@ -350,7 +340,7 @@ class InviteCodeCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Invite code',
+            Txt.inviteCode,
             style: Theme.of(context).textTheme.labelMedium
                 ?.copyWith(color: cs.onSurfaceVariant),
           ),
@@ -367,26 +357,26 @@ class InviteCodeCard extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: 'Copy',
+                tooltip: Txt.copy,
                 icon: const Icon(Icons.copy_rounded),
                 onPressed: () async {
-                  await Clipboard.setData(ClipboardData(text: code));
+                  await Clipboard.setData(
+                    ClipboardData(text: group.invite ?? code),
+                  );
                   if (context.mounted) {
-                    _report(context, null, ok: 'Code copied.');
+                    _report(context, null, ok: Txt.inviteCopied);
                   }
                 },
               ),
               IconButton(
-                tooltip: 'New code',
+                tooltip: Txt.newCode,
                 icon: const Icon(Icons.autorenew_rounded),
                 onPressed: () async {
                   final ok = await _confirm(
                     context,
-                    title: 'Make a new code?',
-                    text:
-                        'The old code stops working. People already in the '
-                        'group stay in.',
-                    action: 'New code',
+                    title: Txt.makeANewCode,
+                    text: Txt.theOldCodeStopsWorking,
+                    action: Txt.newCode,
                   );
                   if (!ok || !context.mounted) return;
                   final err = await app.newInviteCode(group);
@@ -399,14 +389,14 @@ class InviteCodeCard extends StatelessWidget {
           const SizedBox(height: 4),
           FilledButton.tonalIcon(
             onPressed: () => SharePlus.instance.share(
-              ShareParams(text: shareText(group), subject: 'Join me on Flock'),
+              ShareParams(text: shareText(group), subject: Txt.joinMeOnFlock),
             ),
             icon: const Icon(Icons.share_rounded),
-            label: const Text('Share code'),
+            label: const Text(Txt.shareInvite),
           ),
           const SizedBox(height: 4),
           Text(
-            'Anyone with the code can ask to join. You decide who gets in.',
+            Txt.shareSendsTheFullInvite,
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: cs.onSurfaceVariant),
           ),
@@ -454,7 +444,10 @@ class _RequestTileState extends State<_RequestTile> {
               children: [
                 Text(r.name, style: t.titleMedium),
                 Text(
-                  '@${r.username} · new to Flock ${timeAgo(r.accountCreated).toLowerCase()}',
+                  Txt.newToFlock(
+                    r.username,
+                    timeAgo(r.accountCreated).toLowerCase(),
+                  ),
                   style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
               ],
@@ -471,14 +464,14 @@ class _RequestTileState extends State<_RequestTile> {
             )
           else ...[
             IconButton(
-              tooltip: 'Say no',
+              tooltip: Txt.sayNo,
               icon: const Icon(Icons.close_rounded),
               onPressed: () => _do(() => app.deny(widget.group, r)),
             ),
             FilledButton(
               style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
               onPressed: () => _do(() => app.approve(widget.group, r)),
-              child: const Text('Let in'),
+              child: const Text(Txt.letIn),
             ),
           ],
         ],
@@ -503,23 +496,21 @@ class _MemberTile extends StatelessWidget {
     return ListTile(
       contentPadding: const EdgeInsets.only(right: 4),
       leading: UserAvatar(username: m.username, name: m.name, size: 40),
-      title: Text(me ? '${m.name} (you)' : m.name),
+      title: Text(me ? Txt.nameYou(m.name) : m.name),
       subtitle: Text(
-        m.leader ? 'Leader' : '@${m.username}',
+        m.leader ? Txt.leader : '@${m.username}',
         style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
       ),
       trailing: canManage
           ? PopupMenuButton<String>(
-              tooltip: 'Options for ${m.name}',
+              tooltip: Txt.optionsFor(m.name),
               onSelected: (v) async {
                 if (v == 'remove') {
                   final ok = await _confirm(
                     context,
-                    title: 'Remove ${m.name}?',
-                    text:
-                        'They\'ll stop seeing everyone in ${group.name}, and '
-                        'everyone stops seeing them.',
-                    action: 'Remove',
+                    title: Txt.remove(m.name),
+                    text: Txt.theyLlStopSeeingEveryone(group.name),
+                    action: Txt.remove2,
                   );
                   if (!ok || !context.mounted) return;
                   final err = await app.removeMember(group, m.username);
@@ -528,11 +519,9 @@ class _MemberTile extends StatelessWidget {
                 } else if (v == 'leader') {
                   final ok = await _confirm(
                     context,
-                    title: 'Make ${m.name} the leader?',
-                    text:
-                        'They\'ll approve new people and manage the code. '
-                        'You stay in the group.',
-                    action: 'Make leader',
+                    title: Txt.makeTheLeader(m.name),
+                    text: Txt.theyLlApproveNewPeople,
+                    action: Txt.makeLeader,
                   );
                   if (!ok || !context.mounted) return;
                   final err = await app.makeLeader(group, m.username);
@@ -541,10 +530,10 @@ class _MemberTile extends StatelessWidget {
                 }
               },
               itemBuilder: (_) => const [
-                PopupMenuItem(value: 'leader', child: Text('Make leader')),
+                PopupMenuItem(value: 'leader', child: Text(Txt.makeLeader)),
                 PopupMenuItem(
                   value: 'remove',
-                  child: Text('Remove from group'),
+                  child: Text(Txt.removeFromGroup),
                 ),
               ],
             )
@@ -626,10 +615,10 @@ class _CreateGroupFormState extends State<CreateGroupForm> {
   Widget build(BuildContext context) {
     return _InlineForm(
       controller: _name,
-      label: 'Group name',
-      hint: 'e.g. Class of 2024',
+      label: Txt.groupName,
+      hint: Txt.eGTheCrew,
       icon: Icons.group_add_rounded,
-      button: 'Start',
+      button: Txt.start,
       busy: _busy,
       error: _error,
       capitalization: TextCapitalization.words,
@@ -639,7 +628,7 @@ class _CreateGroupFormState extends State<CreateGroupForm> {
   }
 }
 
-/// "Join a group": enter the code a leader shared; they then let you in.
+/// "Join a group": paste the invite a leader shared; they then let you in.
 class JoinGroupForm extends StatefulWidget {
   const JoinGroupForm({super.key, this.onDone});
   final VoidCallback? onDone;
@@ -649,14 +638,34 @@ class JoinGroupForm extends StatefulWidget {
 }
 
 class _JoinGroupFormState extends State<JoinGroupForm> {
-  final _code = TextEditingController();
+  final _invite = TextEditingController();
   bool _busy = false;
   String? _error;
+  String? _filled;
+
+  /// Fill in an invite link that opened the app.
+  void _takePending(String? link) {
+    if (link == null || link == _filled) return;
+    _filled = link;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _invite.text = link;
+      setState(() => _error = null);
+    });
+  }
 
   @override
   void dispose() {
-    _code.dispose();
+    _invite.dispose();
     super.dispose();
+  }
+
+  Future<void> _paste() async {
+    final d = await Clipboard.getData(Clipboard.kTextPlain);
+    if (d?.text != null) {
+      _invite.text = d!.text!.trim();
+      setState(() => _error = null);
+    }
   }
 
   Future<void> _go() async {
@@ -665,31 +674,59 @@ class _JoinGroupFormState extends State<JoinGroupForm> {
       _busy = true;
       _error = null;
     });
-    final err = await context.read<AppState>().joinGroup(_code.text);
+    final err = await context.read<AppState>().joinWithInvite(_invite.text);
     if (!mounted) return;
     setState(() {
       _busy = false;
       _error = err;
     });
     if (err == null) {
-      _code.clear();
+      _invite.clear();
       widget.onDone?.call();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return _InlineForm(
-      controller: _code,
-      label: 'Invite code',
-      hint: 'e.g. K7Q-2MX',
-      icon: Icons.vpn_key_rounded,
-      button: 'Ask to join',
-      busy: _busy,
-      error: _error,
-      capitalization: TextCapitalization.characters,
-      onSubmit: _go,
-      onChanged: () => setState(() => _error = null),
+    _takePending(context.select<AppState, String?>((a) => a.pendingInvite));
+    return ListenableBuilder(
+      listenable: _invite,
+      builder: (context, _) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _invite,
+            autocorrect: false,
+            minLines: 1,
+            maxLines: 4,
+            keyboardType: TextInputType.multiline,
+            decoration: InputDecoration(
+              labelText: Txt.invite,
+              hintText: Txt.pasteTheInviteYouWere,
+              prefixIcon: const Icon(Icons.vpn_key_rounded),
+              suffixIcon: IconButton(
+                tooltip: Txt.paste,
+                icon: const Icon(Icons.content_paste_rounded),
+                onPressed: _paste,
+              ),
+              errorText: _error,
+              errorMaxLines: 4,
+            ),
+            onChanged: (_) => setState(() => _error = null),
+          ),
+          const SizedBox(height: 10),
+          FilledButton(
+            onPressed: _invite.text.trim().isNotEmpty && !_busy ? _go : null,
+            child: _busy
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.5),
+                  )
+                : const Text(Txt.askToJoin),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -811,7 +848,7 @@ Future<bool> _confirm(
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
+          child: const Text(Txt.cancel),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(ctx, true),
@@ -844,11 +881,11 @@ Future<String?> _askText(
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx),
-          child: const Text('Cancel'),
+          child: const Text(Txt.cancel),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(ctx, c.text),
-          child: const Text('Save'),
+          child: const Text(Txt.save),
         ),
       ],
     ),

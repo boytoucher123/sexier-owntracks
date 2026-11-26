@@ -102,11 +102,20 @@ class _Accounts extends AccountService {
   bool hasGroup = true;
   bool zoeAsking = true;
 
-  /// Groups from before group settings run on this server; new ones have
-  /// no server until their leader adds one.
+  /// Asked to join with an invite, not let in yet (the setup screens).
+  bool waiting = false;
+
+  /// The group runs on the server your account is on; the server sends its
+  /// details (the app has none built in).
   Map<String, Object?>? config = {
     'standard': true,
     'tracking_mode': 'balanced',
+    'host': 'tracking.thecrew.net',
+    'port': 8883,
+    'tls': true,
+    'ca': '',
+    'recorder_url': 'https://tracking.thecrew.net',
+    'topic_prefix': 'owntracks',
   };
 
   Map<String, dynamic> _me() => {
@@ -121,6 +130,7 @@ class _Accounts extends AccountService {
           'leader': 'fred-durk',
           'role': 'leader',
           'code': 'K7Q-2MX',
+          'invite': 'flock://tracking.thecrew.net/join/K7Q-2MX',
           'config': config,
           'members': [
             for (final (u, n) in _crewMembers)
@@ -140,8 +150,23 @@ class _Accounts extends AccountService {
               },
           ],
         },
+      if (hasGroup)
+        {
+          'id': 2,
+          'name': 'Footy',
+          'leader': 'sam-o',
+          'role': 'member',
+          'config': config,
+          'members': [
+            {'username': 'sam-o', 'name': 'Sam O', 'leader': true},
+            {'username': 'fred-durk', 'name': 'Fred Durk'},
+          ],
+          'requests': const [],
+        },
     ],
-    'pending': <Object>[],
+    'pending': [
+      if (waiting) {'id': 1, 'name': 'The Crew', 'leader_name': 'Maya Chen'},
+    ],
     'visible': [
       if (hasGroup)
         for (final (u, n) in _crewMembers)
@@ -150,9 +175,18 @@ class _Accounts extends AccountService {
   };
 
   @override
-  Future<NewAccount> signUp(String name) async {
+  Future<String> trustFor(Invite invite) async => '';
+
+  @override
+  Future<NewAccount> signUp(AppSettings at, String name) async {
     hasGroup = false;
     return NewAccount(username: 'fred-durk', password: 'x' * 24, name: name);
+  }
+
+  @override
+  Future<Account> join(AppSettings s, String code) async {
+    waiting = true;
+    return Account.fromJson(_me());
   }
 
   @override
@@ -427,12 +461,11 @@ Future<(_State, _Mqtt)> _boot(
 }
 
 const _crew = AppSettings(
-  host: 'tracking.thecrew.net',
   username: 'fred-durk',
   password: 'x',
   displayName: 'Fred Durk',
   trackerId: 'FD',
-  recorderUrl: 'https://tracking.thecrew.net/owntracks',
+  accountServer: 'tracking.thecrew.net',
   setupComplete: true,
 );
 
@@ -490,25 +523,23 @@ void main() {
     FocusManager.instance.primaryFocus?.unfocus();
     await _shot(t, '02-you');
 
-    await t.tap(find.text('Create my account'));
+    await t.tap(find.text('Continue'));
     await _settle(t);
     await _settle(
       t,
     ); // let the page finish sliding in; it ignores taps until then
-    await _shot(t, '03-group');
+    await t.enterText(
+      find.widgetWithText(TextField, 'Invite'),
+      'Join "The Crew" on Flock. Install Flock, then paste this whole message '
+      'when it asks for an invite:\n\n'
+      'flock://tracking.thecrew.net/join/K7Q-2MX',
+    );
+    FocusManager.instance.primaryFocus?.unfocus();
+    await _shot(t, '03-join');
 
-    await t.enterText(find.widgetWithText(TextField, 'Group name'), 'The Crew');
-    await _settle(t); // the list scrolls the field into view; taps wait for it
-    await t.tap(find.text('Start'));
+    await t.tap(find.text('Ask to join'));
     await _settle(t);
-    await _shot(t, '04-group-code');
-
-    // The new group has no server yet: the leader sets one up.
-    await t.tap(find.text('Set up'));
-    await _settle(t);
-    await _shot(t, '15-group-settings');
-    await t.pageBack();
-    await _settle(t);
+    await _shot(t, '04-join-waiting');
 
     await t.tap(find.text('Continue'));
     await _shot(t, '04-location');
@@ -588,6 +619,9 @@ void main() {
     await _settle(t);
     await t.tap(find.text('Groups').first);
     await _shot(t, '14-groups');
+
+    await t.tap(find.text('Settings'));
+    await _shot(t, '15-group-settings');
   }, skip: skip != null);
 
   testWidgets('settings', (t) async {
@@ -596,5 +630,16 @@ void main() {
     await _settle(t);
     await t.tap(find.byTooltip('Settings'));
     await _shot(t, '09-settings');
+
+    await t.tap(find.textContaining('Tracking:'));
+    await _shot(t, '17-my-tracking');
+  }, skip: skip != null);
+
+  testWidgets('switch group', (t) async {
+    final (_, mqtt) = await _boot(t, settings: _crew);
+    _populate(mqtt);
+    await _settle(t);
+    await t.tap(find.byIcon(Icons.arrow_drop_down_rounded));
+    await _shot(t, '16-switch-group');
   }, skip: skip != null);
 }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../config/server_config.dart';
+import '../strings.dart';
 
 /// How hard the phone works to track your position.
 enum TrackingMode {
@@ -16,17 +17,15 @@ enum TrackingMode {
 
 extension TrackingModeText on TrackingMode {
   String get label => switch (this) {
-    TrackingMode.batterySaver => 'Saver',
-    TrackingMode.balanced => 'Balanced',
-    TrackingMode.precise => 'Precise',
+    TrackingMode.batterySaver => Txt.saver,
+    TrackingMode.balanced => Txt.balanced,
+    TrackingMode.precise => Txt.precise,
   };
 
   String get description => switch (this) {
-    TrackingMode.batterySaver =>
-      'Updates when you move about 500 m. Easiest on battery.',
-    TrackingMode.balanced => 'Updates every ~100 m of movement. Recommended.',
-    TrackingMode.precise =>
-      'Frequent, exact updates. Uses noticeably more battery.',
+    TrackingMode.batterySaver => Txt.updatesWhenYouMoveAbout,
+    TrackingMode.balanced => Txt.updatesEvery100MOf,
+    TrackingMode.precise => Txt.frequentExactUpdatesUsesNoticeably,
   };
 }
 
@@ -59,8 +58,8 @@ enum MapStyle {
 /// here; they live in secure storage and are attached at load time.
 class AppSettings {
   const AppSettings({
-    this.host = kDefaultHost,
-    this.port = kDefaultPort,
+    this.host = '',
+    this.port = 8883,
     this.useTls = true,
     this.useWebSocket = false,
     this.username = '',
@@ -69,18 +68,21 @@ class AppSettings {
     this.trackerId = '',
     this.displayName = '',
     this.baseTopic = 'owntracks',
-    this.recorderUrl = kDefaultRecorderUrl,
+    this.recorderUrl = '',
     this.recorderUsername = '',
     this.recorderPassword = '',
     this.trackingMode = TrackingMode.balanced,
+    this.myTracking,
     this.mapProvider = MapProvider.google,
     this.mapStyle = MapStyle.satellite,
     this.sharingLocation = true,
     this.setupComplete = false,
     this.keepAliveSeconds = 60,
     this.allowUntrustedCertificates = false,
-    this.caPem = kServerCaPem,
+    this.caPem = '',
     this.activeGroupId = 0,
+    this.accountServer = '',
+    this.accountCa = '',
   });
 
   // --- Connection -----------------------------------------------------------
@@ -120,8 +122,17 @@ class AppSettings {
   /// first group you're in.
   final int activeGroupId;
 
+  /// Where your account lives (`host:port` of its Flock API), and the CA its
+  /// certificate is checked against ('' = a public certificate). Both come
+  /// from the invite you joined with; the app has no server of its own.
+  final String accountServer;
+  final String accountCa;
+
   // --- Preferences ----------------------------------------------------------
   final TrackingMode trackingMode;
+
+  /// Your own tracking level. Null = use the group's default.
+  final TrackingMode? myTracking;
   final MapProvider mapProvider;
   final MapStyle mapStyle;
   final bool sharingLocation;
@@ -132,7 +143,7 @@ class AppSettings {
 
   /// A personal account made by the app (not the old shared login).
   bool get hasAccount =>
-      username.isNotEmpty && password.isNotEmpty && username != kLegacyUsername;
+      username.isNotEmpty && password.isNotEmpty && accountServer.isNotEmpty;
 
   bool get hasRecorder => recorderUrl.trim().isNotEmpty;
 
@@ -154,6 +165,8 @@ class AppSettings {
     String? recorderUsername,
     String? recorderPassword,
     TrackingMode? trackingMode,
+    TrackingMode? myTracking,
+    bool groupDefaultTracking = false,
     MapProvider? mapProvider,
     MapStyle? mapStyle,
     bool? sharingLocation,
@@ -162,6 +175,8 @@ class AppSettings {
     bool? allowUntrustedCertificates,
     String? caPem,
     int? activeGroupId,
+    String? accountServer,
+    String? accountCa,
   }) {
     return AppSettings(
       host: host ?? this.host,
@@ -178,6 +193,7 @@ class AppSettings {
       recorderUsername: recorderUsername ?? this.recorderUsername,
       recorderPassword: recorderPassword ?? this.recorderPassword,
       trackingMode: trackingMode ?? this.trackingMode,
+      myTracking: groupDefaultTracking ? null : (myTracking ?? this.myTracking),
       mapProvider: mapProvider ?? this.mapProvider,
       mapStyle: mapStyle ?? this.mapStyle,
       sharingLocation: sharingLocation ?? this.sharingLocation,
@@ -187,6 +203,8 @@ class AppSettings {
           allowUntrustedCertificates ?? this.allowUntrustedCertificates,
       caPem: caPem ?? this.caPem,
       activeGroupId: activeGroupId ?? this.activeGroupId,
+      accountServer: accountServer ?? this.accountServer,
+      accountCa: accountCa ?? this.accountCa,
     );
   }
 
@@ -204,6 +222,7 @@ class AppSettings {
     'recorderUrl': recorderUrl,
     'recorderUsername': recorderUsername,
     'trackingMode': trackingMode.name,
+    'myTracking': myTracking?.name,
     'mapProvider': mapProvider.name,
     'mapStyle': mapStyle.name,
     'sharingLocation': sharingLocation,
@@ -211,6 +230,8 @@ class AppSettings {
     'keepAliveSeconds': keepAliveSeconds,
     'allowUntrustedCertificates': allowUntrustedCertificates,
     'activeGroupId': activeGroupId,
+    'accountServer': accountServer,
+    'accountCa': accountCa,
   };
 
   factory AppSettings.fromJson(
@@ -220,8 +241,8 @@ class AppSettings {
   }) {
     T pick<T>(String k, T fallback) => j[k] is T ? j[k] as T : fallback;
     return AppSettings(
-      host: pick('host', kDefaultHost),
-      port: pick('port', kDefaultPort),
+      host: pick('host', ''),
+      port: pick('port', 8883),
       useTls: pick('useTls', true),
       useWebSocket: pick('useWebSocket', false),
       username: pick('username', ''),
@@ -230,16 +251,16 @@ class AppSettings {
       trackerId: pick('trackerId', ''),
       displayName: pick('displayName', ''),
       baseTopic: pick('baseTopic', 'owntracks'),
-      // Saved before history was set up? Use the server's history address.
-      recorderUrl: pick('recorderUrl', '').trim().isEmpty
-          ? kDefaultRecorderUrl
-          : pick('recorderUrl', ''),
+      recorderUrl: pick('recorderUrl', ''),
       recorderUsername: pick('recorderUsername', ''),
       recorderPassword: recorderPassword,
       trackingMode: TrackingMode.values.firstWhere(
         (m) => m.name == j['trackingMode'],
         orElse: () => TrackingMode.balanced,
       ),
+      myTracking: TrackingMode.values
+          .where((m) => m.name == j['myTracking'])
+          .firstOrNull,
       mapProvider: MapProvider.values.firstWhere(
         (m) => m.name == j['mapProvider'],
         orElse: () => MapProvider.google,
@@ -253,6 +274,8 @@ class AppSettings {
       keepAliveSeconds: pick('keepAliveSeconds', 60),
       allowUntrustedCertificates: pick('allowUntrustedCertificates', false),
       activeGroupId: pick('activeGroupId', 0),
+      accountServer: pick('accountServer', ''),
+      accountCa: pick('accountCa', ''),
     );
   }
 
