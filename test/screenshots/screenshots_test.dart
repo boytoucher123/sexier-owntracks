@@ -132,6 +132,24 @@ class _Accounts extends AccountService {
           'code': 'K7Q-2MX',
           'invite': 'flock://tracking.thecrew.net/join/K7Q-2MX',
           'config': config,
+          'places': [
+            {
+              'id': 1,
+              'name': 'Home',
+              'lat': _fred.$1,
+              'lon': _fred.$2,
+              'radius': 100,
+              'created_by': 'fred-durk',
+            },
+            {
+              'id': 2,
+              'name': 'Work',
+              'lat': _mary.$1,
+              'lon': _mary.$2,
+              'radius': 150,
+              'created_by': 'maya-chen',
+            },
+          ],
           'members': [
             for (final (u, n) in _crewMembers)
               {'username': u, 'name': n, 'leader': u == 'fred-durk'},
@@ -510,7 +528,7 @@ void main() {
   });
 
   testWidgets('onboarding', (t) async {
-    await _boot(
+    final (state, _) = await _boot(
       t,
       settings: const AppSettings(),
       access: LocationAccess.notAsked,
@@ -543,6 +561,15 @@ void main() {
 
     await t.tap(find.text('Continue'));
     await _shot(t, '04-location');
+
+    // Finishing keeps the server the invite saved (it used to be wiped,
+    // which left the app offline and signed out on the next start).
+    await t.tap(find.text('Not now'));
+    await _settle(t);
+    expect(state.settings.setupComplete, isTrue);
+    expect(state.settings.hasAccount, isTrue);
+    expect(state.settings.accountServer, 'tracking.thecrew.net');
+    state.onPause(); // stop the account polling the home screen started
   }, skip: skip != null);
 
   testWidgets('home', (t) async {
@@ -622,6 +649,37 @@ void main() {
 
     await t.tap(find.text('Settings'));
     await _shot(t, '15-group-settings');
+
+    await t.scrollUntilVisible(
+      find.text('More options'),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await t.tap(find.text('More options'));
+    await _settle(t);
+    await _shot(t, '18-more-options');
+  }, skip: skip != null);
+
+  testWidgets('places', (t) async {
+    final (_, mqtt) = await _boot(t, settings: _crew);
+    _populate(mqtt);
+    await _settle(t);
+    await t.tap(find.text('Groups').first);
+    await _settle(t);
+    await t.scrollUntilVisible(
+      find.text('Add a place').first,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await _shot(t, '19-places');
+    await t.tap(find.text('Add a place').first);
+    await _settle(t);
+    await t.enterText(
+      find.widgetWithText(TextField, 'Name'),
+      'Mona Vale Beach',
+    );
+    FocusManager.instance.primaryFocus?.unfocus();
+    await _shot(t, '20-add-place');
   }, skip: skip != null);
 
   testWidgets('settings', (t) async {

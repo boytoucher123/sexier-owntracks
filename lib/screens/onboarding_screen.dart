@@ -80,7 +80,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<void> _finish() async {
     setState(() => _finishing = true);
     final app = context.read<AppState>();
-    await app.updateSettings(_draft);
+    // Only what this screen owns: joining saved the server and login since
+    // the draft was taken, and those must not be overwritten.
+    await app.updateSettings(
+      app.settings.copyWith(
+        displayName: _draft.displayName,
+        trackerId: _draft.trackerId,
+      ),
+    );
     await app.setMyPhoto(_photo);
     await app.completeSetup();
   }

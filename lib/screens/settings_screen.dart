@@ -671,15 +671,15 @@ class _GroupTrackingTile extends StatelessWidget {
       subtitle: Text(
         g == null
             ? Txt.joinOrStartAGroup
-            : g.config == null
+            : g.config == null || mode == null
             ? Txt.isnTSetUpYet2(g.name)
             : mine == null
             ? Txt.setByFor(
-                mode!.description,
+                mode.description,
                 g.isLeader ? Txt.you : g.leaderName,
                 g.name,
               )
-            : mode!.description,
+            : mode.description,
         style: TextStyle(color: cs.onSurfaceVariant),
       ),
       trailing: const Icon(Icons.chevron_right_rounded),

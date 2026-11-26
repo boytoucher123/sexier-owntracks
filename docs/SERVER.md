@@ -65,14 +65,20 @@ data in `/var/lib/flock/flock.db` (sqlite).
   - A leader can also read the card (name and photo) of someone asking to join.
 - **Group settings:**
   - Each group has a `config`. It is either `{"standard": true}` (runs on this
-    server, with each person's own login) or the leader's own server (host,
-    port, TLS, optional CA, shared login, history address and topic prefix).
+    server) or the leader's own server (host, port, TLS, optional CA, history
+    address and topic prefix). There is no shared group login: everyone signs
+    in with their own account either way.
   - Both kinds carry `tracking_mode`, which is the group's default. Each person
     can pick their own tracking level in the app.
   - Only approved members receive the config.
   - **New groups start with no config and must bring their own server.** Only
     the server's owner can put a group on this server:
     `flock-admin set-standard GROUP_ID`.
+- **Places:** anyone in a group can add a shared place (`POST
+  /flock/api/groups/ID/places {name, lat, lon, radius}`, radius 25 m to 2 km,
+  50 per group). Whoever added a place, or the leader, can remove it
+  (`DELETE …/places/PID`). Members get them in `/me`. The app uses them for
+  "At School since 3 pm", place names in history, and arrival messages.
 - **Only standard groups use this server.** The ACL gives broker rights only
   to members of a standard group, or people asking to join one. The history
   check works the same way.

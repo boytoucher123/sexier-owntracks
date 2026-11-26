@@ -20,31 +20,42 @@ class GroupSettingsScreen extends StatefulWidget {
 }
 
 class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
+  // The group's server, shown as it is (for a standard group, the details
+  // your account's server filled in).
   late final GroupConfig? _initial = widget.group.config;
-  late bool _editingServer = _initial == null || !_initial.standard;
 
-  late final _host = TextEditingController(text: _own?.host ?? '');
-  late final _port = TextEditingController(text: '${_own?.port ?? 8883}');
-  late final _user = TextEditingController(text: _own?.username ?? '');
-  late final _pass = TextEditingController(text: _own?.password ?? '');
-  late final _history = TextEditingController(text: _own?.recorderUrl ?? '');
-  late final _prefix = TextEditingController(
-    text: _own?.topicPrefix ?? 'owntracks',
+  late final _host = TextEditingController(text: _initial?.host ?? '');
+  late final _port = TextEditingController(text: '${_initial?.port ?? 8883}');
+  late final _history = TextEditingController(
+    text: _initial?.recorderUrl ?? '',
   );
-  late final _ca = TextEditingController(text: _own?.ca ?? '');
-  late bool _tls = _own?.tls ?? true;
+  late final _prefix = TextEditingController(
+    text: _initial?.topicPrefix ?? 'owntracks',
+  );
+  late final _ca = TextEditingController(text: _initial?.ca ?? '');
+  late bool _tls = _initial?.tls ?? true;
+  bool _more = false;
 
   bool _saving = false;
   bool _testing = false;
   ConnectionTestResult? _test;
   String? _error;
 
-  GroupConfig? get _own =>
-      _initial != null && !_initial.standard ? _initial : null;
+  /// Edited away from what the group has now.
+  bool get _changed {
+    final c = _initial;
+    if (c == null) return true;
+    return _host.text.trim() != c.host ||
+        (int.tryParse(_port.text.trim()) ?? 0) != c.port ||
+        _tls != c.tls ||
+        _history.text.trim() != c.recorderUrl ||
+        _prefix.text.trim() != c.topicPrefix ||
+        _ca.text.trim() != c.ca.trim();
+  }
 
   @override
   void dispose() {
-    for (final c in [_host, _port, _user, _pass, _history, _prefix, _ca]) {
+    for (final c in [_host, _port, _history, _prefix, _ca]) {
       c.dispose();
     }
     super.dispose();
@@ -62,8 +73,6 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
     tls: _tls,
     ca: _ca.text.trim(),
     recorderUrl: _history.text.trim(),
-    username: _user.text.trim(),
-    password: _pass.text,
     topicPrefix: _prefix.text.trim().isEmpty
         ? 'owntracks'
         : _prefix.text.trim(),
@@ -72,7 +81,6 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
 
   bool get _ready =>
       _host.text.trim().isNotEmpty &&
-      _user.text.trim().isNotEmpty &&
       (int.tryParse(_port.text.trim()) ?? 0) > 0;
 
   Future<void> _setMode(AppState app, Group g, TrackingMode m) async {
@@ -99,7 +107,7 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
 
   Future<void> _save(AppState app, Group g, TrackingMode mode) async {
     FocusScope.of(context).unfocus();
-    if (g.config?.standard == true) {
+    if (g.config?.standard == true && _changed) {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -181,33 +189,36 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
           // ---- Server
           Text(Txt.server, style: t.titleMedium),
           const SizedBox(height: 8),
-          if (config?.standard == true && !_editingServer) ...[
-            Card(
-              color: FlockColors.online.withOpacity(0.08),
-              child: const Padding(
-                padding: EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Icon(Icons.verified_rounded, color: FlockColors.online),
-                    SizedBox(width: 12),
-                    Expanded(child: Text(Txt.runsOnThisAppS)),
-                  ],
-                ),
+          Card(
+            color: (config == null ? FlockColors.warning : FlockColors.online)
+                .withOpacity(0.10),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  Icon(
+                    config == null
+                        ? Icons.info_outline_rounded
+                        : Icons.verified_rounded,
+                    color: config == null
+                        ? FlockColors.warning
+                        : FlockColors.online,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      config == null
+                          ? Txt.newGroupsBringTheirOwn
+                          : config.standard
+                          ? Txt.runsOnThisAppS
+                          : Txt.runsOnYourOwnServer,
+                    ),
+                  ),
+                ],
               ),
             ),
-            TextButton(
-              onPressed: () => setState(() => _editingServer = true),
-              child: const Text(Txt.useYourOwnServerInstead),
-            ),
-          ] else ...[
-            if (config == null)
-              Card(
-                color: FlockColors.warning.withOpacity(0.12),
-                child: const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(Txt.newGroupsBringTheirOwn),
-                ),
-              ),
+          ),
+          ...[
             const SizedBox(height: 12),
             _field(
               _host,
@@ -240,13 +251,6 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                 ),
               ],
             ),
-            _field(_user, Txt.groupLoginUsername, icon: Icons.person_rounded),
-            _field(
-              _pass,
-              Txt.groupLoginPassword,
-              icon: Icons.key_rounded,
-              obscure: true,
-            ),
             _field(
               _history,
               Txt.historyAddressOptional,
@@ -254,18 +258,35 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
               icon: Icons.timeline_rounded,
               keyboard: TextInputType.url,
             ),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: const Text(Txt.moreOptions),
-              children: [
-                _field(_prefix, Txt.topicPrefix),
-                _field(
-                  _ca,
-                  Txt.serverCertificateCaOptional,
-                  hint: Txt.pasteThePemIfYour,
-                  lines: 5,
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() => _more = !_more),
+                icon: Icon(
+                  _more ? Icons.expand_less_rounded : Icons.expand_more_rounded,
                 ),
-              ],
+                label: const Text(Txt.moreOptions),
+              ),
+            ),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              alignment: Alignment.topCenter,
+              child: _more
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Column(
+                        children: [
+                          _field(_prefix, Txt.topicPrefix),
+                          _field(
+                            _ca,
+                            Txt.serverCertificateCaOptional,
+                            hint: Txt.pasteThePemIfYour,
+                            lines: 5,
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox(width: double.infinity),
             ),
             const SizedBox(height: 8),
             if (_test != null)
@@ -295,7 +316,7 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                 ),
               ),
             ListenableBuilder(
-              listenable: Listenable.merge([_host, _port, _user]),
+              listenable: Listenable.merge([_host, _port]),
               builder: (context, _) => Row(
                 children: [
                   Expanded(
@@ -315,7 +336,7 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                       style: FilledButton.styleFrom(
                         minimumSize: const Size(0, 52),
                       ),
-                      onPressed: _ready && !_saving
+                      onPressed: _ready && _changed && !_saving
                           ? () => _save(app, g, mode)
                           : null,
                       child: Text(_saving ? Txt.saving : Txt.save),
@@ -350,6 +371,7 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
         maxLines: lines,
         decoration: InputDecoration(
           labelText: label,
+          alignLabelWithHint: lines > 1,
           hintText: hint,
           prefixIcon: icon == null ? null : Icon(icon),
         ),

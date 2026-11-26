@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 // ignore_for_file: deprecated_member_use
 import 'dart:async';
 import 'dart:typed_data';
@@ -9,6 +10,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart' as gm;
 import 'package:latlong2/latlong.dart';
 
 import '../models/person.dart';
+import '../services/account_service.dart' show Place;
 import '../models/settings.dart';
 import '../theme.dart';
 import '../util/format.dart';
@@ -62,11 +64,15 @@ class FamilyMapController {
     _delegate?.fit(points);
   }
 
+  /// The middle of the map right now.
+  LatLng? get center => _delegate?.center;
+
   /// Pans (keeping the zoom) only if [point] is near the edge or off screen.
   void ensureVisible(LatLng point) => _delegate?.ensureVisible(point);
 }
 
 abstract class _MapDelegate {
+  LatLng? get center;
   void focus(LatLng point, double zoom);
   void fit(List<LatLng> points);
   void ensureVisible(LatLng point);
@@ -95,6 +101,9 @@ class FamilyMap extends StatelessWidget {
     this.onMapTap,
     this.bottomInset = 0,
     this.topInset = 0,
+    this.floatingTopic,
+    this.places = const [],
+    this.onCameraIdle,
   });
 
   /// Test/screenshot hook: replaces network tiles. Never set in the app.
@@ -126,6 +135,17 @@ class FamilyMap extends StatelessWidget {
   /// Height covered by the bottom sheet, so focusing centres in what's visible.
   final double bottomInset;
   final double topInset;
+
+  /// A pin that moves every frame (history playback). On Google Maps it's
+  /// drawn over the map instead of as a marker: moving a marker makes the
+  /// plugin re-send its picture each time, which flickers.
+  final String? floatingTopic;
+
+  /// Shared places, drawn as circles.
+  final List<Place> places;
+
+  /// Called with the centre of the map when it stops moving.
+  final ValueChanged<LatLng>? onCameraIdle;
 
   @override
   Widget build(BuildContext context) {
@@ -175,6 +195,9 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
   }
 
   void _run(void Function() f) => _ready ? f() : _pending = f;
+
+  @override
+  LatLng? get center => _ready ? _mc.camera.center : null;
 
   @override
   void focus(LatLng point, double zoom) => _run(() {
@@ -233,6 +256,16 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
           flags: fm.InteractiveFlag.all & ~fm.InteractiveFlag.rotate,
         ),
         onTap: (_, _) => m.onMapTap?.call(),
+        onMapEvent: m.onCameraIdle == null
+            ? null
+            : (e) {
+                if (e is fm.MapEventMoveEnd ||
+                    e is fm.MapEventFlingAnimationEnd ||
+                    e is fm.MapEventDoubleTapZoomEnd ||
+                    e is fm.MapEventScrollWheelZoom) {
+                  m.onCameraIdle!(e.camera.center);
+                }
+              },
         onMapReady: () {
           _ready = true;
           final p = _pending;
@@ -262,6 +295,21 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
             maxNativeZoom: 20,
             tileProvider: FamilyMap.debugTileProvider,
           ),
+        if (m.places.isNotEmpty) ...[
+          fm.CircleLayer(
+            circles: [
+              for (final pl in m.places)
+                fm.CircleMarker(
+                  point: pl.center,
+                  radius: pl.radius,
+                  useRadiusInMeter: true,
+                  color: FlockColors.brand.withOpacity(0.12),
+                  borderColor: FlockColors.brand.withOpacity(0.7),
+                  borderStrokeWidth: 2,
+                ),
+            ],
+          ),
+        ],
         if (m.trail.length > 1)
           fm.PolylineLayer(
             polylines: [
@@ -305,6 +353,19 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
                       ),
                     ),
                   ),
+                ),
+            ],
+          ),
+        if (m.places.isNotEmpty)
+          fm.MarkerLayer(
+            markers: [
+              for (final pl in m.places)
+                fm.Marker(
+                  point: pl.center,
+                  width: 160,
+                  height: 28,
+                  alignment: Alignment.topCenter,
+                  child: IgnorePointer(child: PlaceLabel(name: pl.name)),
                 ),
             ],
           ),
@@ -362,6 +423,39 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
   final Map<String, gm.BitmapDescriptor> _dots = {};
   Size _size = Size.zero;
   bool _following = false;
+
+  /// Where the camera is, for placing the floating pin.
+  gm.CameraPosition? _cam;
+
+  @override
+  LatLng? get center {
+    final t = _cam?.target;
+    return t == null ? null : LatLng(t.latitude, t.longitude);
+  }
+
+  /// [p] in screen pixels (Web Mercator; the map never tilts or rotates).
+  /// The camera target sits in the middle of the padded area.
+  Offset? _toScreen(LatLng p) {
+    final cam = _cam;
+    if (cam == null || _size.isEmpty) return null;
+    final scale = 256 * math.pow(2, cam.zoom).toDouble();
+    Offset world(double lat, double lon) {
+      final sin = math.sin(lat * math.pi / 180).clamp(-0.9999, 0.9999);
+      return Offset(
+        (lon + 180) / 360 * scale,
+        (0.5 - math.log((1 + sin) / (1 - sin)) / (4 * math.pi)) * scale,
+      );
+    }
+
+    final m = widget.map;
+    final centre = Offset(
+      _size.width / 2,
+      m.topInset + (_size.height - m.topInset - m.bottomInset) / 2,
+    );
+    return centre +
+        world(p.latitude, p.longitude) -
+        world(cam.target.latitude, cam.target.longitude);
+  }
 
   @override
   void initState() {
@@ -480,7 +574,36 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
     return LayoutBuilder(
       builder: (context, box) {
         _size = box.biggest;
-        return _buildMap(m, trailColor, first, stopIcon, nodeIcon, selIcon);
+        final map = _buildMap(
+          m,
+          trailColor,
+          first,
+          stopIcon,
+          nodeIcon,
+          selIcon,
+        );
+        final floating = widget.visible
+            .where((p) => p.topic == m.floatingTopic)
+            .firstOrNull;
+        final at = floating == null ? null : _toScreen(floating.last!.latLng);
+        if (at == null) return map;
+        return Stack(
+          clipBehavior: Clip.hardEdge,
+          children: [
+            Positioned.fill(child: map),
+            Positioned(
+              left: at.dx - MapPin.width / 2,
+              top: at.dy - MapPin.height,
+              child: IgnorePointer(
+                child: MapPin(
+                  person: floating!,
+                  selected: floating.topic == m.selectedTopic,
+                  stale: false,
+                ),
+              ),
+            ),
+          ],
+        );
       },
     );
   }
@@ -493,11 +616,38 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
     gm.BitmapDescriptor? nodeIcon,
     gm.BitmapDescriptor? selIcon,
   ) {
+    final start = gm.CameraPosition(
+      target: first != null ? _g(first) : const gm.LatLng(-33.8688, 151.2093),
+      zoom: first != null ? 13 : 3,
+    );
+    _cam ??= start;
     return gm.GoogleMap(
-      initialCameraPosition: gm.CameraPosition(
-        target: first != null ? _g(first) : const gm.LatLng(-33.8688, 151.2093),
-        zoom: first != null ? 13 : 3,
-      ),
+      initialCameraPosition: start,
+      onCameraMove: (c) {
+        // Redraw only when something is drawn from the camera position.
+        if (m.floatingTopic != null) {
+          setState(() => _cam = c);
+        } else {
+          _cam = c;
+        }
+      },
+      onCameraIdle: m.onCameraIdle == null
+          ? null
+          : () {
+              final c = center;
+              if (c != null) m.onCameraIdle!(c);
+            },
+      circles: {
+        for (final pl in m.places)
+          gm.Circle(
+            circleId: gm.CircleId('place${pl.id}'),
+            center: _g(pl.center),
+            radius: pl.radius,
+            fillColor: FlockColors.brand.withOpacity(0.12),
+            strokeColor: FlockColors.brand.withOpacity(0.7),
+            strokeWidth: 2,
+          ),
+      },
       onMapCreated: (c) {
         if (!_controller.isCompleted) _controller.complete(c);
       },
@@ -517,14 +667,15 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
       onTap: (_) => m.onMapTap?.call(),
       markers: {
         for (final p in widget.visible)
-          gm.Marker(
-            markerId: gm.MarkerId(p.topic),
-            position: _g(p.last!.latLng),
-            anchor: const Offset(0.5, 1),
-            icon: _icons[p.topic] ?? gm.BitmapDescriptor.defaultMarker,
-            zIndexInt: p.topic == m.selectedTopic ? 10 : 1,
-            onTap: () => m.onPersonTap(p),
-          ),
+          if (p.topic != m.floatingTopic)
+            gm.Marker(
+              markerId: gm.MarkerId(p.topic),
+              position: _g(p.last!.latLng),
+              anchor: const Offset(0.5, 1),
+              icon: _icons[p.topic] ?? gm.BitmapDescriptor.defaultMarker,
+              zIndexInt: p.topic == m.selectedTopic ? 10 : 1,
+              onTap: () => m.onPersonTap(p),
+            ),
         for (var i = 0; i < m.trailStops.length; i++)
           gm.Marker(
             markerId: gm.MarkerId('stop$i'),
@@ -638,3 +789,33 @@ const _darkStyle = '''
   {"featureType":"transit","stylers":[{"visibility":"off"}]}
 ]
 ''';
+
+/// A place's name on the map.
+class PlaceLabel extends StatelessWidget {
+  const PlaceLabel({super.key, required this.name});
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.92),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: FlockColors.brand.withOpacity(0.5)),
+        ),
+        child: Text(
+          name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: FlockColors.brand,
+          ),
+        ),
+      ),
+    );
+  }
+}
