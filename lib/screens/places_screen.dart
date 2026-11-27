@@ -181,7 +181,7 @@ class _AddPlaceScreenState extends State<AddPlaceScreen> {
                     provider: app.mapProvider,
                     style: app.settings.mapStyle,
                     controller: _map,
-                    people: app.people,
+                    people: const [], // the pin in the middle is what counts
                     onPersonTap: (_) {},
                     markStale: false,
                     // The new place previewed where the map last stopped.
