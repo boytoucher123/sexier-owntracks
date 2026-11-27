@@ -64,6 +64,10 @@ class FamilyMapController {
     _delegate?.fit(points);
   }
 
+  /// Keep [point] in the middle of the map (no animation): for following
+  /// something that moves every frame.
+  void track(LatLng point) => _delegate?.track(point);
+
   /// The middle of the map right now.
   LatLng? get center => _delegate?.center;
 
@@ -73,6 +77,7 @@ class FamilyMapController {
 
 abstract class _MapDelegate {
   LatLng? get center;
+  void track(LatLng point);
   void focus(LatLng point, double zoom);
   void fit(List<LatLng> points);
   void ensureVisible(LatLng point);
@@ -204,6 +209,17 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
   final _mc = fm.MapController();
   bool _ready = false;
   void Function()? _pending;
+  int? _selectedPlace;
+
+  @override
+  void track(LatLng point) => _run(() {
+    final m = widget.map;
+    _mc.move(
+      point,
+      _mc.camera.zoom,
+      offset: Offset(0, -(m.bottomInset - m.topInset) / 2),
+    );
+  });
 
   @override
   void initState() {
@@ -278,7 +294,10 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
         interactionOptions: const fm.InteractionOptions(
           flags: fm.InteractiveFlag.all & ~fm.InteractiveFlag.rotate,
         ),
-        onTap: (_, _) => m.onMapTap?.call(),
+        onTap: (_, _) {
+          if (_selectedPlace != null) setState(() => _selectedPlace = null);
+          m.onMapTap?.call();
+        },
         onMapEvent: m.onCameraIdle == null
             ? null
             : (e) {
@@ -322,14 +341,15 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
           fm.CircleLayer(
             circles: [
               for (final pl in m.places)
-                fm.CircleMarker(
-                  point: pl.center,
-                  radius: pl.radius,
-                  useRadiusInMeter: true,
-                  color: FlockColors.brand.withOpacity(0.12),
-                  borderColor: FlockColors.brand.withOpacity(0.7),
-                  borderStrokeWidth: 2,
-                ),
+                if (_showsArea(pl, _selectedPlace))
+                  fm.CircleMarker(
+                    point: pl.center,
+                    radius: pl.radius,
+                    useRadiusInMeter: true,
+                    color: FlockColors.brand.withOpacity(0.12),
+                    borderColor: FlockColors.brand.withOpacity(0.7),
+                    borderStrokeWidth: 2,
+                  ),
             ],
           ),
         ],
@@ -393,13 +413,30 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
           fm.MarkerLayer(
             markers: [
               for (final pl in m.places)
-                fm.Marker(
-                  point: pl.center,
-                  width: 160,
-                  height: 28,
-                  alignment: Alignment.topCenter,
-                  child: IgnorePointer(child: PlaceLabel(name: pl.name)),
-                ),
+                if (_showsArea(pl, _selectedPlace))
+                  fm.Marker(
+                    point: pl.center,
+                    width: 180,
+                    height: 44,
+                    alignment: const Alignment(0, -1.6),
+                    child: IgnorePointer(
+                      child: PlaceLabel(
+                        name: pl.id == -1
+                            ? pl.name
+                            : '${pl.name} · ${formatDistance(pl.radius * 2)}',
+                      ),
+                    ),
+                  )
+                else
+                  fm.Marker(
+                    point: pl.center,
+                    width: PlaceIcon.size,
+                    height: PlaceIcon.size,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _selectedPlace = pl.id),
+                      child: const PlaceIcon(),
+                    ),
+                  ),
             ],
           ),
         fm.MarkerLayer(
@@ -461,6 +498,30 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
 
   /// Where the camera is, for placing the floating pin.
   gm.CameraPosition? _cam;
+  int? _selectedPlace;
+  gm.BitmapDescriptor? _placeIcon;
+  bool _placeIconAsked = false;
+
+  gm.BitmapDescriptor? _placeBitmap(double ratio) {
+    if (!_placeIconAsked) {
+      _placeIconAsked = true;
+      _renderPlaceBitmap(ratio).then((bytes) {
+        _placeIcon = gm.BitmapDescriptor.bytes(
+          bytes,
+          width: PlaceIcon.size,
+          height: PlaceIcon.size,
+        );
+        if (mounted) setState(() {});
+      });
+    }
+    return _placeIcon;
+  }
+
+  @override
+  void track(LatLng point) async {
+    final c = await _controller.future;
+    await c.moveCamera(gm.CameraUpdate.newLatLng(_g(point)));
+  }
 
   @override
   LatLng? get center {
@@ -674,14 +735,15 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
             },
       circles: {
         for (final pl in m.places)
-          gm.Circle(
-            circleId: gm.CircleId('place${pl.id}'),
-            center: _g(pl.center),
-            radius: pl.radius,
-            fillColor: FlockColors.brand.withOpacity(0.12),
-            strokeColor: FlockColors.brand.withOpacity(0.7),
-            strokeWidth: 2,
-          ),
+          if (_showsArea(pl, _selectedPlace))
+            gm.Circle(
+              circleId: gm.CircleId('place${pl.id}'),
+              center: _g(pl.center),
+              radius: pl.radius,
+              fillColor: FlockColors.brand.withOpacity(0.12),
+              strokeColor: FlockColors.brand.withOpacity(0.7),
+              strokeWidth: 2,
+            ),
       },
       onMapCreated: (c) {
         if (!_controller.isCompleted) _controller.complete(c);
@@ -699,7 +761,10 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
       compassEnabled: false,
       rotateGesturesEnabled: false,
       tiltGesturesEnabled: false,
-      onTap: (_) => m.onMapTap?.call(),
+      onTap: (_) {
+        if (_selectedPlace != null) setState(() => _selectedPlace = null);
+        m.onMapTap?.call();
+      },
       markers: {
         for (final p in widget.visible)
           if (p.topic != m.floatingTopic)
@@ -711,6 +776,25 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
               zIndexInt: p.topic == m.selectedTopic ? 10 : 1,
               onTap: () => m.onPersonTap(p),
             ),
+        for (final pl in m.places)
+          gm.Marker(
+            markerId: gm.MarkerId('place${pl.id}'),
+            position: _g(pl.center),
+            anchor: const Offset(0.5, 0.5),
+            icon:
+                _placeBitmap(MediaQuery.devicePixelRatioOf(context)) ??
+                gm.BitmapDescriptor.defaultMarkerWithHue(
+                  gm.BitmapDescriptor.hueViolet,
+                ),
+            zIndexInt: 0,
+            infoWindow: gm.InfoWindow(
+              title: pl.name,
+              snippet: pl.id == -1
+                  ? null
+                  : Txt.placeSize(formatDistance(pl.radius * 2)),
+            ),
+            onTap: () => setState(() => _selectedPlace = pl.id),
+          ),
         for (var i = 0; i < m.trailStops.length; i++)
           gm.Marker(
             markerId: gm.MarkerId('stop$i'),
@@ -785,6 +869,33 @@ class TrailDot extends StatelessWidget {
   }
 }
 
+/// PNG for a place's icon on Google Maps, matching [PlaceIcon].
+Future<Uint8List> _renderPlaceBitmap(double ratio) async {
+  final px = (PlaceIcon.size * ratio).ceilToDouble();
+  final rec = ui.PictureRecorder();
+  final canvas = Canvas(rec);
+  final c = Offset(px / 2, px / 2);
+  canvas.drawCircle(c, px / 2, Paint()..color = Colors.white);
+  canvas.drawCircle(c, px / 2 - 2 * ratio, Paint()..color = FlockColors.brand);
+  final icon = Icons.place_rounded;
+  final tp = TextPainter(
+    text: TextSpan(
+      text: String.fromCharCode(icon.codePoint),
+      style: TextStyle(
+        fontSize: 15 * ratio,
+        fontFamily: icon.fontFamily,
+        package: icon.fontPackage,
+        color: Colors.white,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
+  final image = await rec.endRecording().toImage(px.toInt(), px.toInt());
+  final data = await image.toByteData(format: ui.ImageByteFormat.png);
+  return data!.buffer.asUint8List();
+}
+
 /// PNG for a Google Maps dot marker, matching [TrailDot] (or a ring for stops).
 Future<Uint8List> _renderDotBitmap(
   Color color,
@@ -827,6 +938,31 @@ const _darkStyle = '''
   {"featureType":"transit","stylers":[{"visibility":"off"}]}
 ]
 ''';
+
+/// A place shows its circle and name only when tapped (or while being
+/// made, id -1); otherwise it's a small icon.
+bool _showsArea(Place p, int? selected) => p.id == -1 || p.id == selected;
+
+/// A place's icon on the map.
+class PlaceIcon extends StatelessWidget {
+  const PlaceIcon({super.key});
+  static const double size = 26;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: FlockColors.brand,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: const [BoxShadow(blurRadius: 3, color: Colors.black26)],
+      ),
+      child: const Icon(Icons.place_rounded, size: 15, color: Colors.white),
+    );
+  }
+}
 
 /// A place's name on the map.
 class PlaceLabel extends StatelessWidget {

@@ -172,7 +172,9 @@ class _HistoryScreenState extends State<HistoryScreen>
       HapticFeedback.selectionClick();
     }
     setState(() => _t = next);
-    _follow();
+    // Follow the pin while it moves.
+    final m = _track.at(next);
+    if (m != null) _map.track(m.pos);
   }
 
   /// Taps on the joystick's sides: the previous or next dot.
@@ -291,7 +293,9 @@ class _HistoryScreenState extends State<HistoryScreen>
               selectedNode: selectedDot < 0 ? null : selectedDot,
               onNodeTap: _jumpToDot,
               markStale: false,
-              floatingTopic: p.topic,
+              // Moving: drawn over the map so it glides. Still: the map
+              // draws it, so it stays put when zooming.
+              floatingTopic: _stick != 0 ? p.topic : null,
               floatingDimmed: guess,
               places: app.places,
               topInset: _topInset,
