@@ -105,7 +105,7 @@ flutter build ios --release
 ### Releases
 
 Push a tag like `v0.2.0` and GitHub Actions runs the tests, builds the Android
-APK and an unsigned iPhone build, and publishes them as a GitHub release.
+APK and publishes it as a GitHub release. iPhone builds aren't made by CI; see above for building one in Xcode.
 
 To make Android updates install over previous versions, every release must be
 signed with the same key. Create one once:
