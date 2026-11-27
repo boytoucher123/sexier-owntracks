@@ -1,0 +1,16 @@
+#!/bin/sh
+# Called by acme.sh after it gets or renews the Let's Encrypt certificate
+# (owntracks-class-of-2024.duckdns.org): copies it into place, then restarts
+# mosquitto (MQTT 8883) and Caddy (HTTPS 8443) so they use it.
+set -e
+SRC=/root/.acme.sh/owntracks-class-of-2024.duckdns.org_ecc
+D=/etc/mosquitto/certs
+cp "$SRC/fullchain.cer" "$D/le-fullchain.crt.new"
+cp "$SRC/owntracks-class-of-2024.duckdns.org.key" "$D/le.key.new"
+chmod 644 "$D/le-fullchain.crt.new"; chmod 600 "$D/le.key.new"
+mv "$D/le-fullchain.crt.new" "$D/le-fullchain.crt"; mv "$D/le.key.new" "$D/le.key"
+/usr/local/bin/owntracks-restart
+for p in $(pgrep -x caddy); do kill "$p"; done
+sleep 1
+nohup caddy run --config /etc/caddy/Caddyfile >>/var/log/caddy/caddy.log 2>&1 &
+echo "$(date '+%F %T') certificate reloaded" >> /var/log/owntracks-start.log

@@ -359,7 +359,8 @@ void _seedAddresses() {
 
 List<LocationFix> _maryDay() {
   final today = DateTime.now();
-  final start = DateTime(today.year, today.month, today.day, 7, 0);
+  // Ends now, so "today" reads naturally whenever this runs.
+  final start = today.subtract(const Duration(minutes: 420));
   final out = <LocationFix>[];
   void stay(double lat, double lon, int fromMin, int toMin) {
     for (var m = fromMin; m <= toMin; m += 5) {
@@ -394,12 +395,8 @@ List<LocationFix> _maryDay() {
     90,
   );
   stay(-33.8850, 151.1950, 90, 115); // coffee
-  drive(
-    [(-33.8800, 151.2000), (-33.8740, 151.2040), (-33.8700, 151.2060)],
-    115,
-    140,
-  );
-  stay(_mary.$1, _mary.$2, 140, 300); // work
+  // No signal on the way to work: nothing until she's there (a grey gap).
+  stay(_mary.$1, _mary.$2, 200, 416); // work
   return out;
 }
 

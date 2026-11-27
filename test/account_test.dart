@@ -7,6 +7,7 @@ import 'package:flock/models/person.dart';
 import 'package:flock/models/settings.dart';
 import 'package:flock/services/account_service.dart';
 import 'package:flock/services/location_service.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:flock/services/mqtt_service.dart';
 import 'package:flock/services/owntracks_protocol.dart';
 import 'package:flock/services/recorder_service.dart';
@@ -102,6 +103,13 @@ class _Store extends SettingsStore {
   Future<String> clientIdSuffix() async => 'test1234';
   @override
   Future<void> clearAll() async => s = const AppSettings();
+
+  List<(String, String)> outbox = [];
+  @override
+  Future<List<(String, String)>> loadOutbox() async => List.of(outbox);
+  @override
+  Future<void> saveOutbox(List<(String, String)> items) async =>
+      outbox = List.of(items);
 }
 
 class _Mqtt extends MqttService {
@@ -116,8 +124,16 @@ class _Mqtt extends MqttService {
   @override
   Future<void> connect(AppSettings s, {required String clientId}) async =>
       connects.add(s);
+  bool online = true;
+  final published = <(String, String, bool)>[]; // topic, payload, retained
   @override
-  bool publish(String topic, String payload, {bool retain = true}) => true;
+  bool publish(String topic, String payload, {bool retain = true}) {
+    if (!online) return false;
+    published.add((topic, payload, retain));
+    return true;
+  }
+
+  void connected() => onConnected?.call();
   @override
   void refreshPeople() => refreshes++;
   @override
@@ -454,6 +470,58 @@ void main() {
       await pumpEventQueue();
       expect(mqtt.refreshes, before + 1);
     });
+  });
+
+  test('reports made offline are kept and sent once back online', () async {
+    final store = _Store()
+      ..s = const AppSettings(
+        username: 'maya-chen',
+        password: 'mine',
+        displayName: 'Maya Chen',
+        accountServer: 'flock.example.net:8443',
+        setupComplete: true,
+      );
+    final mqtt = _Mqtt();
+    final loc = _Location();
+    final app = AppState(
+      store: store,
+      mqtt: mqtt,
+      location: loc,
+      accounts: _Accounts(),
+    );
+    await app.init();
+    await app.refreshAccount();
+    await Future<void>.delayed(Duration.zero);
+
+    Position at(double lat, int minutesAgo) => Position(
+      latitude: lat,
+      longitude: 151.2,
+      timestamp: DateTime.now().subtract(Duration(minutes: minutesAgo)),
+      accuracy: 5,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: 0,
+      headingAccuracy: 0,
+      speed: 0,
+      speedAccuracy: 0,
+    );
+
+    mqtt.online = false;
+    loc.onFix!(DeviceFix(at(-33.80, 30), 80, false, 't'));
+    loc.onFix!(DeviceFix(at(-33.81, 20), 79, false, 't'));
+    expect(app.unsentReports, 2);
+    expect(store.outbox, hasLength(2)); // survives the app closing
+
+    mqtt.online = true;
+    mqtt.connected();
+    final mine = mqtt.published
+        .where((p) => p.$1 == 'owntracks/maya-chen/phone')
+        .toList();
+    expect(mine, hasLength(2));
+    expect(mine.every((p) => !p.$3), isTrue); // not retained: old news
+    expect(jsonDecode(mine.first.$2)['lat'], -33.80); // oldest first
+    expect(app.unsentReports, 0);
+    expect(store.outbox, isEmpty);
   });
 
   group('places', () {

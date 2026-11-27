@@ -190,6 +190,7 @@ class AppState extends ChangeNotifier {
       _settings = _settings.copyWith(setupComplete: false);
     }
     _myFace = await _store.loadFace();
+    _outbox.addAll(await _store.loadOutbox());
     _clientSuffix = await _store.clientIdSuffix();
     // Last known groups, so the phone can connect before the server answers.
     final cached = _settings.hasAccount ? await _store.loadAccount() : null;
@@ -287,6 +288,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _onConnected() {
+    _flushOutbox();
     _publishCard();
     if (_settings.sharingLocation) {
       unawaited(location.reportNow('u'));
@@ -677,7 +679,7 @@ class AppState extends ChangeNotifier {
       charging: f.charging,
       trigger: f.trigger,
     );
-    mqtt.publish(_ownTopic, payload);
+    if (!mqtt.publish(_ownTopic, payload)) _queue(_ownTopic, payload);
 
     // Update our own dot even if we're offline.
     final me = _ensurePerson(_ownTopic);
@@ -694,6 +696,41 @@ class AppState extends ChangeNotifier {
       );
       notifyListeners();
     }
+  }
+
+  // ------------------------------------------------------------- offline ---
+
+  /// Reports made while offline. Each carries the time it was taken, so sent
+  /// later they land in history at the right moment.
+  final List<(String, String)> _outbox = [];
+  static const _kOutboxMax = 5000;
+
+  /// How many reports are waiting to be sent.
+  int get unsentReports => _outbox.length;
+
+  void _queue(String topic, String payload) {
+    _outbox.add((topic, payload));
+    if (_outbox.length > _kOutboxMax) {
+      _outbox.removeRange(0, _outbox.length - _kOutboxMax);
+    }
+    unawaited(_store.saveOutbox(List.of(_outbox)));
+  }
+
+  /// Back online: send what was saved, oldest first. Not retained, so the
+  /// broker keeps your newest position (sent right after) as your last.
+  void _flushOutbox() {
+    if (_outbox.isEmpty) return;
+    var sent = 0;
+    for (final (topic, payload) in _outbox) {
+      if (topic != _ownTopic) {
+        sent++; // another server or login: drop it
+        continue;
+      }
+      if (!mqtt.publish(topic, payload, retain: false)) break;
+      sent++;
+    }
+    _outbox.removeRange(0, sent);
+    unawaited(_store.saveOutbox(List.of(_outbox)));
   }
 
   /// Ask someone's phone to send a fresh location (like Life360's "refresh").

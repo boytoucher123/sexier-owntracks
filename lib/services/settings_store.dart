@@ -21,6 +21,7 @@ class SettingsStore {
   static const _kPassword = 'password';
   static const _kRecorderPassword = 'recorderPassword';
   static const _kAccount = 'account.v1';
+  static const _kOutbox = 'outbox.v1';
 
   Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -64,6 +65,39 @@ class SettingsStore {
       await prefs.remove(_kFace);
     } else {
       await prefs.setString(_kFace, base64Encode(bytes));
+    }
+  }
+
+  /// Location reports made while offline, waiting to be sent: (topic, json).
+  Future<List<(String, String)>> loadOutbox() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kOutbox);
+      if (raw == null) return [];
+      return [
+        for (final e in jsonDecode(raw) as List)
+          if (e is List && e.length == 2) (e[0] as String, e[1] as String),
+      ];
+    } on Object {
+      return [];
+    }
+  }
+
+  Future<void> saveOutbox(List<(String, String)> items) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (items.isEmpty) {
+        await prefs.remove(_kOutbox);
+      } else {
+        await prefs.setString(
+          _kOutbox,
+          jsonEncode([
+            for (final (t, p) in items) [t, p],
+          ]),
+        );
+      }
+    } on Object {
+      // Not fatal: those reports just won't be resent.
     }
   }
 
