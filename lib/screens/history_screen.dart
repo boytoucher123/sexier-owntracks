@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../config/server_config.dart';
@@ -14,7 +13,7 @@ import '../services/platform_services.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../util/format.dart';
-import '../util/timeline.dart';
+import '../util/day_track.dart';
 import '../widgets/avatar.dart';
 import '../widgets/family_map.dart';
 import '../widgets/history_joystick.dart';
@@ -30,81 +29,13 @@ double historySpeed(double push) {
   return 0.8 + 45 * a * a * a;
 }
 
-/// Which fixes get a dot on the map. Fixes closer than [minMeters] to the
-/// previous dot (someone sitting still) are skipped so dots don't pile up.
-/// The first and last fix always get one.
+/// Minutes of the day per second for a joystick push: a few minutes a
+/// second near the centre, the whole day in about ten seconds at the edge.
 @visibleForTesting
-List<int> historyDotIndices(List<LocationFix> fixes, {double minMeters = 25}) {
-  if (fixes.isEmpty) return const [];
-  final out = <int>[0];
-  for (var i = 1; i < fixes.length; i++) {
-    final isLast = i == fixes.length - 1;
-    if (isLast ||
-        metersBetween(fixes[out.last].latLng, fixes[i].latLng) >= minMeters) {
-      out.add(i);
-    }
-  }
-  return out;
-}
+double historyMinutesPerSecond(double push) => historySpeed(push) * 3;
 
-/// Playback points: a stay (lots of reports from one spot) becomes a single
-/// point at its centre, timed from its first report, with when it ended.
-/// Everything else is kept as it is.
-@visibleForTesting
-({List<LocationFix> fixes, List<DateTime?> until}) collapseStays(
-  List<LocationFix> fixes,
-  List<Stay> stays,
-) {
-  final out = <LocationFix>[];
-  final until = <DateTime?>[];
-  var k = 0;
-  var i = 0;
-  while (i < fixes.length) {
-    final f = fixes[i];
-    while (k < stays.length && stays[k].end.isBefore(f.timestamp)) {
-      k++;
-    }
-    final stay = k < stays.length ? stays[k] : null;
-    if (stay == null || f.timestamp.isBefore(stay.start)) {
-      out.add(f);
-      until.add(null);
-      i++;
-      continue;
-    }
-    // Inside the stay: skip to its last report.
-    var j = i;
-    while (j + 1 < fixes.length && !fixes[j + 1].timestamp.isAfter(stay.end)) {
-      j++;
-    }
-    final last = fixes[j];
-    out.add(
-      LocationFix(
-        lat: stay.center.latitude,
-        lon: stay.center.longitude,
-        timestamp: stay.start,
-        battery: last.battery,
-        charging: last.charging,
-      ),
-    );
-    until.add(stay.end);
-    i = j + 1;
-    k++;
-  }
-  return (fixes: out, until: until);
-}
-
-/// The position at a fractional index, between two fixes.
-@visibleForTesting
-LatLng historyPositionAt(List<LocationFix> fixes, double pos) {
-  final i = pos.floor().clamp(0, fixes.length - 1);
-  if (i >= fixes.length - 1) return fixes.last.latLng;
-  final f = pos - i;
-  final a = fixes[i], b = fixes[i + 1];
-  return LatLng(a.lat + (b.lat - a.lat) * f, a.lon + (b.lon - a.lon) * f);
-}
-
-/// "Daily history": one person's day on the map, with a joystick to travel
-/// through it.
+/// "Daily history": one person's day on the map, with a joystick that moves
+/// a clock through the day. The map shows where they were at that moment.
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key, required this.person});
   final Person person;
@@ -124,18 +55,25 @@ class _HistoryScreenState extends State<HistoryScreen>
   int _request = 0;
   bool _loading = true;
   String? _error;
-  List<LocationFix> _fixes = const [];
+  DayTrack _track = DayTrack(const []);
 
-  /// For points that are a stay: when it ended (else null).
-  List<DateTime?> _until = const [];
+  /// Points that get a dot (stays always do; close-together reports don't).
   List<int> _dots = const [];
-  List<LatLng> _stops = const [];
 
-  double _pos = 0; // fractional index into _fixes
+  late DateTime _dayStart = _midnight(0);
+  late DateTime _dayEnd = DateTime.now();
+
+  /// The moment being looked at.
+  late DateTime _t = DateTime.now();
   double _stick = 0; // joystick push, -1..1
 
   static const _topInset = 84.0;
-  static const _panelHeight = 228.0;
+  static const _panelHeight = 250.0;
+
+  static DateTime _midnight(int daysAgo) {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day - daysAgo);
+  }
 
   @override
   void initState() {
@@ -152,18 +90,17 @@ class _HistoryScreenState extends State<HistoryScreen>
   Future<void> _load(int day) async {
     final req = ++_request;
     _setStick(0);
+    final start = _midnight(day);
+    final end = day == 0
+        ? DateTime.now()
+        : _midnight(day - 1).subtract(const Duration(seconds: 1));
     setState(() {
       _dayOffset = day;
+      _dayStart = start;
+      _dayEnd = end;
       _loading = true;
       _error = null;
     });
-    final now = DateTime.now();
-    final start = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).subtract(Duration(days: day));
-    final end = day == 0 ? now : start.add(const Duration(days: 1));
     try {
       final fixes = await context.read<AppState>().history(
         widget.person,
@@ -171,77 +108,101 @@ class _HistoryScreenState extends State<HistoryScreen>
         end,
       );
       if (!mounted || req != _request) return;
-      final stays = buildTimeline(fixes).whereType<Stay>().toList();
-      final played = collapseStays(fixes, stays);
+      final track = DayTrack(fixes);
       setState(() {
-        _fixes = played.fixes;
-        _until = played.until;
-        _dots = {
-          ...historyDotIndices(played.fixes),
-          for (var i = 0; i < played.until.length; i++)
-            if (played.until[i] != null) i,
-        }.toList()..sort();
-        _stops = stays.map((s) => s.center).toList();
-        // Start at the latest point: "where were they last?"
-        _pos = played.fixes.isEmpty ? 0 : (played.fixes.length - 1).toDouble();
+        _track = track;
+        _dots = _dotIndices(track);
+        // Start at the latest moment there's data for.
+        _t = day == 0 ? end : (track.isEmpty ? end : track.points.last.end);
         _loading = false;
       });
-      if (fixes.isNotEmpty) {
-        _map.fit(played.fixes.map((f) => f.latLng).toList());
+      if (!track.isEmpty) {
+        _map.fit(track.points.map((p) => p.pos).toList());
       }
     } on Object catch (e) {
       if (!mounted || req != _request) return;
       setState(() {
         _loading = false;
         _error = e.toString();
-        _fixes = const [];
-        _until = const [];
+        _track = DayTrack(const []);
         _dots = const [];
-        _stops = const [];
       });
     }
+  }
+
+  static List<int> _dotIndices(DayTrack track) {
+    final out = <int>[];
+    for (var i = 0; i < track.points.length; i++) {
+      final p = track.points[i];
+      final isEnd = i == 0 || i == track.points.length - 1;
+      if (isEnd ||
+          p.isStay ||
+          metersBetween(track.points[out.last].pos, p.pos) >= 25) {
+        out.add(i);
+      }
+    }
+    return out;
   }
 
   // ------------------------------------------------------------ movement --
 
   void _setStick(double v) {
     _stick = v;
-    if (v != 0 && !_ticker.isActive && _fixes.length > 1) {
+    if (v != 0 && !_ticker.isActive && !_track.isEmpty) {
       _lastTick = Duration.zero;
       _ticker.start();
     } else if (v == 0 && _ticker.isActive) {
       _ticker.stop();
-      // Settle on the nearest real point so the time and address are exact.
-      if (_fixes.isNotEmpty) setState(() => _pos = _pos.roundToDouble());
+      setState(() {}); // look up the address now it's still
     }
   }
 
   void _tick(Duration elapsed) {
     final dt = (elapsed - _lastTick).inMicroseconds / 1e6;
     _lastTick = elapsed;
-    final speed = historySpeed(_stick);
-    if (speed == 0 || _fixes.length < 2) return;
-    final last = (_fixes.length - 1).toDouble();
-    final next = (_pos + _stick.sign * speed * dt).clamp(0.0, last);
-    if (next == _pos) return;
-    // A tick for each point passed, when moving slowly enough to feel it.
-    if (speed < 6 && next.round() != _pos.round()) {
+    final speed = historyMinutesPerSecond(_stick);
+    if (speed == 0) return;
+    final ms = (_stick.sign * speed * 60000 * dt).round();
+    var next = _t.add(Duration(milliseconds: ms));
+    if (next.isBefore(_dayStart)) next = _dayStart;
+    if (next.isAfter(_dayEnd)) next = _dayEnd;
+    if (next == _t) return;
+    // A tick each time a report is passed, when slow enough to feel it.
+    if (speed < 20 && _track.indexAt(next) != _track.indexAt(_t)) {
       HapticFeedback.selectionClick();
     }
-    setState(() => _pos = next);
+    setState(() => _t = next);
     _follow();
   }
 
+  /// Taps on the joystick's sides: the previous or next dot.
   void _step(int dir) {
-    if (_fixes.isEmpty) return;
-    final target = (_pos.round() + dir).clamp(0, _fixes.length - 1);
-    setState(() => _pos = target.toDouble());
+    if (_dots.isEmpty) return;
+    final pts = _track.points;
+    DateTime? target;
+    if (dir < 0) {
+      for (final i in _dots.reversed) {
+        if (pts[i].start.isBefore(_t)) {
+          target = pts[i].start;
+          break;
+        }
+      }
+    } else {
+      for (final i in _dots) {
+        if (pts[i].start.isAfter(_t)) {
+          target = pts[i].start;
+          break;
+        }
+      }
+    }
+    if (target == null) return;
+    setState(() => _t = target!);
     _follow(force: true);
   }
 
   void _jumpToDot(int dot) {
     _setStick(0);
-    setState(() => _pos = _dots[dot].toDouble());
+    setState(() => _t = _track.points[_dots[dot]].start);
     HapticFeedback.selectionClick();
     _follow(force: true);
   }
@@ -251,12 +212,11 @@ class _HistoryScreenState extends State<HistoryScreen>
     final now = DateTime.now();
     if (!force && now.difference(_lastFollow).inMilliseconds < 250) return;
     _lastFollow = now;
-    _map.ensureVisible(historyPositionAt(_fixes, _pos));
+    final m = _track.at(_t);
+    if (m != null) _map.ensureVisible(m.pos);
   }
 
   // -------------------------------------------------------------- build --
-
-  LocationFix? get _current => _fixes.isEmpty ? null : _fixes[_pos.round()];
 
   @override
   Widget build(BuildContext context) {
@@ -264,10 +224,10 @@ class _HistoryScreenState extends State<HistoryScreen>
     final p = widget.person;
     final color = FlockColors.forKey(p.topic);
     final media = MediaQuery.of(context);
-    final cur = _current;
+    final moment = _track.at(_t);
 
-    // The person's pin rides along the trail.
-    final pin = cur == null
+    // The person's pin, where they were at that moment.
+    final pin = moment == null
         ? null
         : Person(
             topic: p.topic,
@@ -277,12 +237,20 @@ class _HistoryScreenState extends State<HistoryScreen>
             face: p.face,
             trackerId: p.trackerId,
             last: LocationFix(
-              lat: historyPositionAt(_fixes, _pos).latitude,
-              lon: historyPositionAt(_fixes, _pos).longitude,
-              timestamp: cur.timestamp,
+              lat: moment.pos.latitude,
+              lon: moment.pos.longitude,
+              timestamp: _t,
             ),
           );
-    final selectedDot = _stick == 0 ? _dots.indexOf(_pos.round()) : -1;
+    var selectedDot = -1;
+    if (_stick == 0 &&
+        moment?.point != null &&
+        !_t.isAfter(moment!.point!.end)) {
+      selectedDot = _dots.indexOf(_track.points.indexOf(moment.point!));
+    }
+    final guess =
+        moment != null &&
+        (moment.state == TrackState.gap || moment.state == TrackState.before);
 
     return Scaffold(
       appBar: AppBar(
@@ -316,14 +284,15 @@ class _HistoryScreenState extends State<HistoryScreen>
               people: [?pin],
               selectedTopic: p.topic,
               onPersonTap: (_) {},
-              trail: _fixes.map((f) => f.latLng).toList(),
-              trailStops: _stops,
+              trail: [for (final pt in _track.points) pt.pos],
+              trailGaps: _track.gaps,
               trailColor: color,
-              nodes: [for (final i in _dots) _fixes[i].latLng],
+              nodes: [for (final i in _dots) _track.points[i].pos],
               selectedNode: selectedDot < 0 ? null : selectedDot,
               onNodeTap: _jumpToDot,
               markStale: false,
               floatingTopic: p.topic,
+              floatingDimmed: guess,
               places: app.places,
               topInset: _topInset,
               bottomInset: _panelHeight + media.padding.bottom,
@@ -342,7 +311,7 @@ class _HistoryScreenState extends State<HistoryScreen>
               onLater: _dayOffset > 0 ? () => _load(_dayOffset - 1) : null,
             ),
           ),
-          if (!_loading && (_error != null || _fixes.isEmpty))
+          if (!_loading && (_error != null || _track.isEmpty))
             Positioned(
               top: _topInset + 16,
               left: 32,
@@ -359,13 +328,15 @@ class _HistoryScreenState extends State<HistoryScreen>
             right: 16,
             bottom: media.padding.bottom + 16,
             child: _Panel(
-              fixes: _fixes,
-              until: _until,
-              ongoing: _dayOffset == 0,
-              pos: _pos,
+              t: _t,
+              moment: moment,
+              dayStart: _dayStart,
+              dayEnd: _dayEnd,
+              today: _dayOffset == 0,
               moving: _stick != 0,
+              enabled: !_track.isEmpty,
               color: color,
-              onStick: (v) => _setStick(v),
+              onStick: _setStick,
               onStep: _step,
             ),
           ),
@@ -439,29 +410,29 @@ class _DayBar extends StatelessWidget {
   }
 }
 
-/// Bottom card: when and where the selected point is, how far through the
-/// day it is, and the joystick.
+/// Bottom card: the time being looked at, where they were then, how far
+/// through the day it is, and the joystick.
 class _Panel extends StatelessWidget {
   const _Panel({
-    required this.fixes,
-    required this.until,
-    required this.ongoing,
-    required this.pos,
+    required this.t,
+    required this.moment,
+    required this.dayStart,
+    required this.dayEnd,
+    required this.today,
     required this.moving,
+    required this.enabled,
     required this.color,
     required this.onStick,
     required this.onStep,
   });
 
-  final List<LocationFix> fixes;
-
-  /// When each stay ended (null for a point that isn't a stay).
-  final List<DateTime?> until;
-
-  /// Today: the last stay is still going.
-  final bool ongoing;
-  final double pos;
+  final DateTime t;
+  final TrackMoment? moment;
+  final DateTime dayStart;
+  final DateTime dayEnd;
+  final bool today;
   final bool moving;
+  final bool enabled;
   final Color color;
   final ValueChanged<double> onStick;
   final ValueChanged<int> onStep;
@@ -470,20 +441,65 @@ class _Panel extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final has = fixes.isNotEmpty;
-    final i = has ? pos.round() : 0;
-    final cur = has ? fixes[i] : null;
-    final end = has && i < until.length ? until[i] : null;
     final fmt = DateFormat.jm();
-    final stayingNow = end != null && ongoing && i == fixes.length - 1;
-    final when = cur == null
-        ? '–'
-        : end == null
-        ? fmt.format(cur.timestamp)
-        : stayingNow
-        ? Txt.sinceTime(fmt.format(cur.timestamp))
-        : Txt.timeRange(fmt.format(cur.timestamp), fmt.format(end));
-    final progress = fixes.length > 1 ? pos / (fixes.length - 1) : 0.0;
+    final m = moment;
+    final point = m?.point;
+    final fix = point?.fix;
+    final atNow = today && dayEnd.difference(this.t).inSeconds.abs() < 60;
+    final span = dayEnd.difference(dayStart).inMilliseconds;
+    final progress = span <= 0
+        ? 0.0
+        : (this.t.difference(dayStart).inMilliseconds / span).clamp(0.0, 1.0);
+
+    // Last stay of today still going: "since".
+    final stillThere =
+        today &&
+        point != null &&
+        point.isStay &&
+        (m!.state == TrackState.after || m.state == TrackState.staying) &&
+        dayEnd.difference(point.end) < const Duration(minutes: 30);
+
+    String? detail;
+    var detailMuted = false;
+    switch (m?.state) {
+      case null:
+        break;
+      case TrackState.before:
+        detail = Txt.noDataBefore(fmt.format(point!.start));
+        detailMuted = true;
+      case TrackState.staying:
+        detail = stillThere
+            ? Txt.hereSince(fmt.format(point.start))
+            : Txt.stayedFromTo(fmt.format(point!.start), fmt.format(point.end));
+      case TrackState.moving:
+        detail = point != null && point.end == this.t
+            ? Txt.reportAt(fmt.format(point.end))
+            : Txt.betweenReports;
+      case TrackState.gap:
+        detail = Txt.noDataFromTo(fmt.format(m!.from!), fmt.format(m.to!));
+        detailMuted = true;
+      case TrackState.after:
+        detail = stillThere
+            ? Txt.hereSince(fmt.format(point.start))
+            : Txt.lastReportAt(fmt.format(point!.end));
+        detailMuted = !stillThere;
+    }
+
+    final where = m == null
+        ? null
+        : m.state == TrackState.gap
+        ? Text(
+            Txt.locationUnknown,
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          )
+        : _Address(
+            fix: LocationFix(
+              lat: m.pos.latitude,
+              lon: m.pos.longitude,
+              timestamp: this.t,
+            ),
+            moving: moving,
+          );
 
     return _Glass(
       radius: 24,
@@ -500,7 +516,7 @@ class _Panel extends StatelessWidget {
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      when,
+                      atNow ? Txt.now : fmt.format(this.t),
                       style: t.titleLarge?.copyWith(
                         fontWeight: FontWeight.w800,
                       ),
@@ -509,45 +525,72 @@ class _Panel extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                if (end != null)
+                if (point != null &&
+                    point.isStay &&
+                    (m!.state == TrackState.staying || stillThere))
                   _Pill(
                     icon: Icons.timer_outlined,
                     text: formatDuration(
-                      (stayingNow ? DateTime.now() : end).difference(
-                        cur!.timestamp,
-                      ),
+                      (stillThere ? dayEnd : point.end).difference(point.start),
                     ),
                     color: color,
                   ),
-                if (cur != null && (cur.velocityKmh ?? 0) >= 8)
+                if (m?.state == TrackState.moving &&
+                    (fix?.velocityKmh ?? 0) >= 8)
                   _Pill(
                     icon: Icons.speed_rounded,
-                    text: Txt.kmH(cur.velocityKmh!.round()),
+                    text: Txt.kmH(fix!.velocityKmh!.round()),
                     color: color,
                   ),
-                if (cur?.battery != null) ...[
+                if (fix?.battery != null) ...[
                   const SizedBox(width: 6),
                   _Pill(
-                    icon: cur!.charging == true
+                    icon: fix!.charging == true
                         ? Icons.battery_charging_full_rounded
                         : Icons.battery_std_rounded,
-                    text: '${cur.battery}%',
+                    text: '${fix.battery}%',
                     color: cs.onSurfaceVariant,
                   ),
                 ],
               ],
             ),
             const SizedBox(height: 2),
+            SizedBox(height: 22, child: where),
             SizedBox(
-              height: 22,
-              child: cur == null ? null : _Address(fix: cur, moving: moving),
+              height: 18,
+              child: detail == null
+                  ? null
+                  : Row(
+                      children: [
+                        if (detailMuted) ...[
+                          Icon(
+                            Icons
+                                .signal_cellular_connected_no_internet_0_bar_rounded,
+                            size: 14,
+                            color: cs.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        Expanded(
+                          child: Text(
+                            detail,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: t.bodySmall?.copyWith(
+                              color: detailMuted ? cs.onSurfaceVariant : color,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
             ),
-            const SizedBox(height: 10),
-            // How far through the day.
+            const SizedBox(height: 8),
+            // Where in the day this is, midnight to midnight.
             ClipRRect(
               borderRadius: BorderRadius.circular(3),
               child: LinearProgressIndicator(
-                value: has ? progress : 0,
+                value: progress,
                 minHeight: 5,
                 color: color,
                 backgroundColor: color.withOpacity(0.15),
@@ -557,26 +600,21 @@ class _Panel extends StatelessWidget {
             Row(
               children: [
                 Text(
-                  has ? fmt.format(fixes.first.timestamp) : '',
+                  fmt.format(dayStart),
                   style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
                 const Spacer(),
                 Text(
-                  has
-                      ? fmt.format(
-                          (until.isNotEmpty ? until.last : null) ??
-                              fixes.last.timestamp,
-                        )
-                      : '',
+                  today ? Txt.now : fmt.format(dayEnd),
                   style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
               ],
             ),
             const SizedBox(height: 6),
             IgnorePointer(
-              ignoring: fixes.length < 2,
+              ignoring: !enabled,
               child: Opacity(
-                opacity: fixes.length < 2 ? 0.4 : 1,
+                opacity: enabled ? 1 : 0.4,
                 child: HistoryJoystick(
                   color: color,
                   onChanged: onStick,

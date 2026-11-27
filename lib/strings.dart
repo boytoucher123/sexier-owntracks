@@ -539,4 +539,16 @@ abstract final class Txt {
   static const placeName = 'Name';
   static const placeNameHint = 'e.g. Home, School, Mona Vale Beach';
   static const savePlace = 'Save place';
+
+  // ---- History: moving through the day by time ------------------------------
+  static const now = 'Now';
+  static String noDataBefore(Object? time) => 'No reports before $time';
+  static String hereSince(Object? time) => 'Here since $time';
+  static String stayedFromTo(Object? from, Object? to) => 'Here $from – $to';
+  static String reportAt(Object? time) => 'Reported at $time';
+  static const betweenReports = 'On the way (between reports)';
+  static String noDataFromTo(Object? from, Object? to) =>
+      'No reports $from – $to (lost signal?)';
+  static String lastReportAt(Object? time) => 'Last report at $time';
+  static const locationUnknown = 'Location unknown';
 }

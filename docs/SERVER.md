@@ -20,6 +20,9 @@ are kept in this repo.
 }
 ```
 
+With a public certificate (the reference server uses Let's Encrypt through
+DuckDNS, renewed by acme.sh from `server/owntracks-start`, which then runs
+`server/owntracks-cert-reload`), leave `ca_file` out.
 `ca_file` is only needed with a private CA. Its SHA-256 goes into every invite
 (`?ca=…`), and the app checks the downloaded CA against that fingerprint before
 trusting it. Leave it out with a public certificate.

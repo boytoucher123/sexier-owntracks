@@ -94,6 +94,8 @@ class FamilyMap extends StatelessWidget {
     this.trail = const [],
     this.trailStops = const [],
     this.trailColor,
+    this.trailGaps = const {},
+    this.floatingDimmed = false,
     this.nodes = const [],
     this.selectedNode,
     this.onNodeTap,
@@ -118,6 +120,27 @@ class FamilyMap extends StatelessWidget {
   final List<LatLng> trail;
   final List<LatLng> trailStops;
   final Color? trailColor;
+
+  /// Stretches of [trail] (index i: from point i to i+1) where data is
+  /// missing. Drawn as a grey dashed line.
+  final Set<int> trailGaps;
+
+  /// Grey out the [floatingTopic] pin (its position is only a guess).
+  final bool floatingDimmed;
+
+  /// [trail] cut into runs: (points, isGap).
+  List<(List<LatLng>, bool)> get trailRuns {
+    final out = <(List<LatLng>, bool)>[];
+    for (var i = 0; i + 1 < trail.length; i++) {
+      final gap = trailGaps.contains(i);
+      if (out.isNotEmpty && out.last.$2 == gap) {
+        out.last.$1.add(trail[i + 1]);
+      } else {
+        out.add(([trail[i], trail[i + 1]], gap));
+      }
+    }
+    return out;
+  }
 
   /// Small tappable dots along the trail (history points).
   final List<LatLng> nodes;
@@ -313,13 +336,23 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
         if (m.trail.length > 1)
           fm.PolylineLayer(
             polylines: [
-              fm.Polyline(
-                points: m.trail,
-                strokeWidth: 5,
-                color: trailColor,
-                borderStrokeWidth: 2,
-                borderColor: Colors.white.withOpacity(0.9),
-              ),
+              for (final (pts, gap) in m.trailRuns)
+                gap
+                    ? fm.Polyline(
+                        points: pts,
+                        strokeWidth: 4,
+                        color: Colors.grey.shade500,
+                        pattern: fm.StrokePattern.dashed(
+                          segments: const [10, 8],
+                        ),
+                      )
+                    : fm.Polyline(
+                        points: pts,
+                        strokeWidth: 5,
+                        color: trailColor,
+                        borderStrokeWidth: 2,
+                        borderColor: Colors.white.withOpacity(0.9),
+                      ),
             ],
           ),
         if (m.trailStops.isNotEmpty)
@@ -383,7 +416,9 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
                   child: MapPin(
                     person: p,
                     selected: p.topic == m.selectedTopic,
-                    stale: m.markStale && isStale(p.last!.timestamp),
+                    stale: p.topic == m.floatingTopic
+                        ? m.floatingDimmed
+                        : m.markStale && isStale(p.last!.timestamp),
                   ),
                 ),
               ),
@@ -598,7 +633,7 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
                 child: MapPin(
                   person: floating!,
                   selected: floating.topic == m.selectedTopic,
-                  stale: false,
+                  stale: m.floatingDimmed,
                 ),
               ),
             ),
@@ -703,12 +738,15 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
             ),
       },
       polylines: {
-        if (m.trail.length > 1)
+        for (final (i, (pts, gap)) in m.trailRuns.indexed)
           gm.Polyline(
-            polylineId: const gm.PolylineId('trail'),
-            points: m.trail.map(_g).toList(),
-            color: trailColor,
-            width: 5,
+            polylineId: gm.PolylineId('trail$i'),
+            points: pts.map(_g).toList(),
+            color: gap ? Colors.grey.shade500 : trailColor,
+            width: gap ? 4 : 5,
+            patterns: gap
+                ? [gm.PatternItem.dash(20), gm.PatternItem.gap(14)]
+                : const [],
           ),
       },
     );
