@@ -85,40 +85,8 @@ jobs:
           name: android
           path: Flock-*.apk
 
-  ios:
-    needs: test
-    runs-on: macos-latest
-    # The iPhone build is a bonus: without it the release still ships the APK.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-      - name: Build unsigned iOS app
-        env:
-          CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY || secrets.MAPS_API_KEY }}
-        run: |
-          # Info.plist reads GMSApiKey from this git-ignored file.
-          if [ -n "$GOOGLE_API_KEY" ]; then
-            printf 'GOOGLE_MAPS_API_KEY=%s\n' "$GOOGLE_API_KEY" > ios/Flutter/Secrets.xcconfig
-          fi
-          flutter pub get
-          flutter build ios --release --no-codesign --dart-define=CARTO_API_KEY="$CARTO_API_KEY"
-          mkdir -p Payload
-          cp -R build/ios/iphoneos/Runner.app Payload/
-          zip -qry "Flock-$TAG-unsigned.ipa" Payload
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ios
-          path: Flock-*-unsigned.ipa
-
   release:
-    needs: [android, ios]
-    if: ${{ !cancelled() && needs.android.result == 'success' }}
+    needs: android
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -136,11 +104,9 @@ jobs:
 
           **Android:** download the `.apk` below and open it on your phone. You may need to allow installing apps from your browser or file manager.
 
-          **iPhone:** the `-unsigned.ipa` (if attached) has to be signed before it will install, e.g. with AltStore or Sideloadly, or rebuilt in Xcode with your Apple developer account.
-
           ## Setup
 
-          Open the app, enter your OwnTracks server address, the shared username and password, tap **Test connection**, then enter your name. See the README for details.
+          Open the app, enter your name, then tap the invite link your group leader sent you (or paste it into the app).
 
           This is an early build that hasn't been widely tested on phones yet. Please report anything odd.
           EOF
