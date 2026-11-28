@@ -669,6 +669,25 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     await _shot(t, '19-places');
+    // Tapping a place in the list shows it on the map.
+    await t.scrollUntilVisible(
+      find.widgetWithText(ListTile, 'Home'),
+      -200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await t.drag(find.byType(Scrollable).first, const Offset(0, 300));
+    await _settle(t);
+    await t.tap(find.widgetWithText(ListTile, 'Home'));
+    await _settle(t);
+    await _settle(t);
+    await _shot(t, '21-place-on-map');
+    await t.tap(find.text('Groups').first);
+    await _settle(t);
+    await Scrollable.ensureVisible(
+      find.text('Add a place').first.evaluate().first,
+      alignment: 0.5,
+    );
+    await _settle(t);
     await t.tap(find.text('Add a place').first);
     await _settle(t);
     await t.enterText(

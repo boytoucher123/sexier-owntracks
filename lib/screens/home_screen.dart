@@ -68,11 +68,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   StreamSubscription<PlaceEvent>? _placeSub;
+  late final ValueNotifier<Place?> _placeToShow;
+
+  /// A place tapped in the Groups list: show it on the map.
+  void _showPlace() {
+    final p = _placeToShow.value;
+    if (p == null) return;
+    _placeToShow.value = null;
+    _clearSelection();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _map.showPlace(p);
+      if (_sheet.isAttached && _sheet.size > _kSheetHalf) {
+        _sheet.animateTo(
+          _kSheetHalf,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _placeToShow = context.read<AppState>().placeToShow
+      ..addListener(_showPlace);
     // "Jack arrived at School"
     _placeSub = context.read<AppState>().placeEvents.listen((e) {
       if (!mounted) return;
@@ -110,6 +132,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _placeSub?.cancel();
+    _placeToShow.removeListener(_showPlace);
     _sheet.dispose();
     super.dispose();
   }

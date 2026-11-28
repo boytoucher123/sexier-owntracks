@@ -550,6 +550,15 @@ class AppState extends ChangeNotifier {
         accounts.addPlace(_settings, g.id, name: name, at: at, radius: radius),
   );
 
+  /// A place to show on the home map (tapped in the Groups list).
+  final placeToShow = ValueNotifier<Place?>(null);
+
+  /// Switch to [g]'s map and zoom in on [place].
+  Future<void> showPlaceOnMap(Group g, Place place) async {
+    await setActiveGroup(g);
+    placeToShow.value = place;
+  }
+
   Future<String?> removePlace(Group g, Place place) =>
       _act(() => accounts.removePlace(_settings, g.id, place.id));
 

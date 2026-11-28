@@ -293,9 +293,9 @@ class _HistoryScreenState extends State<HistoryScreen>
               selectedNode: selectedDot < 0 ? null : selectedDot,
               onNodeTap: _jumpToDot,
               markStale: false,
-              // Moving: drawn over the map so it glides. Still: the map
-              // draws it, so it stays put when zooming.
-              floatingTopic: _stick != 0 ? p.topic : null,
+              // Drawn over the map: moving a map marker makes Google Maps
+              // flash.
+              floatingTopic: p.topic,
               floatingDimmed: guess,
               places: app.places,
               topInset: _topInset,
