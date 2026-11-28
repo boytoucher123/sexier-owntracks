@@ -71,6 +71,9 @@ class FamilyMapController {
   /// The middle of the map right now.
   LatLng? get center => _delegate?.center;
 
+  /// Zoom in on a place and show its area and name.
+  void showPlace(Place place) => _delegate?.showPlace(place);
+
   /// Pans (keeping the zoom) only if [point] is near the edge or off screen.
   void ensureVisible(LatLng point) => _delegate?.ensureVisible(point);
 }
@@ -78,6 +81,7 @@ class FamilyMapController {
 abstract class _MapDelegate {
   LatLng? get center;
   void track(LatLng point);
+  void showPlace(Place place);
   void focus(LatLng point, double zoom);
   void fit(List<LatLng> points);
   void ensureVisible(LatLng point);
@@ -210,6 +214,12 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
   bool _ready = false;
   void Function()? _pending;
   int? _selectedPlace;
+
+  @override
+  void showPlace(Place place) {
+    setState(() => _selectedPlace = place.id);
+    focus(place.center, _zoomFor(place, MediaQuery.sizeOf(context).width));
+  }
 
   @override
   void track(LatLng point) => _run(() {
@@ -418,14 +428,11 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
                     point: pl.center,
                     width: 180,
                     height: 44,
-                    alignment: const Alignment(0, -1.6),
-                    child: IgnorePointer(
-                      child: PlaceLabel(
-                        name: pl.id == -1
-                            ? pl.name
-                            : '${pl.name} · ${formatDistance(pl.radius * 2)}',
-                      ),
-                    ),
+                    alignment: const Alignment(
+                      0,
+                      1.6,
+                    ), // under the spot: pins sit above it
+                    child: IgnorePointer(child: PlaceLabel(name: pl.name)),
                   )
                 else
                   fm.Marker(
@@ -433,7 +440,7 @@ class _StandardFamilyMapState extends State<_StandardFamilyMap>
                     width: PlaceIcon.size,
                     height: PlaceIcon.size,
                     child: GestureDetector(
-                      onTap: () => setState(() => _selectedPlace = pl.id),
+                      onTap: () => showPlace(pl),
                       child: const PlaceIcon(),
                     ),
                   ),
@@ -517,10 +524,18 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
     return _placeIcon;
   }
 
+  gm.GoogleMapController? _ctl;
+
   @override
-  void track(LatLng point) async {
-    final c = await _controller.future;
-    await c.moveCamera(gm.CameraUpdate.newLatLng(_g(point)));
+  void track(LatLng point) {
+    // No awaiting: called every frame while the history pin moves.
+    _ctl?.moveCamera(gm.CameraUpdate.newLatLng(_g(point)));
+  }
+
+  @override
+  void showPlace(Place place) {
+    setState(() => _selectedPlace = place.id);
+    focus(place.center, _zoomFor(place, MediaQuery.sizeOf(context).width));
   }
 
   @override
@@ -727,12 +742,13 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
           _cam = c;
         }
       },
-      onCameraIdle: m.onCameraIdle == null
-          ? null
-          : () {
-              final c = center;
-              if (c != null) m.onCameraIdle!(c);
-            },
+      onCameraIdle: () {
+        // Put the floating pin exactly in place once the map settles (it
+        // can trail a frame behind during a pinch).
+        if (m.floatingTopic != null && mounted) setState(() {});
+        final c = center;
+        if (c != null) m.onCameraIdle?.call(c);
+      },
       circles: {
         for (final pl in m.places)
           if (_showsArea(pl, _selectedPlace))
@@ -746,6 +762,7 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
             ),
       },
       onMapCreated: (c) {
+        _ctl = c;
         if (!_controller.isCompleted) _controller.complete(c);
       },
       mapType: switch (m.style) {
@@ -787,13 +804,8 @@ class _GoogleFamilyMapState extends State<_GoogleFamilyMap>
                   gm.BitmapDescriptor.hueViolet,
                 ),
             zIndexInt: 0,
-            infoWindow: gm.InfoWindow(
-              title: pl.name,
-              snippet: pl.id == -1
-                  ? null
-                  : Txt.placeSize(formatDistance(pl.radius * 2)),
-            ),
-            onTap: () => setState(() => _selectedPlace = pl.id),
+            infoWindow: gm.InfoWindow(title: pl.name),
+            onTap: () => showPlace(pl),
           ),
         for (var i = 0; i < m.trailStops.length; i++)
           gm.Marker(
@@ -876,13 +888,17 @@ Future<Uint8List> _renderPlaceBitmap(double ratio) async {
   final canvas = Canvas(rec);
   final c = Offset(px / 2, px / 2);
   canvas.drawCircle(c, px / 2, Paint()..color = Colors.white);
-  canvas.drawCircle(c, px / 2 - 2 * ratio, Paint()..color = FlockColors.brand);
+  canvas.drawCircle(
+    c,
+    px / 2 - 1.5 * ratio,
+    Paint()..color = FlockColors.brand,
+  );
   final icon = Icons.place_rounded;
   final tp = TextPainter(
     text: TextSpan(
       text: String.fromCharCode(icon.codePoint),
       style: TextStyle(
-        fontSize: 15 * ratio,
+        fontSize: 11 * ratio,
         fontFamily: icon.fontFamily,
         package: icon.fontPackage,
         color: Colors.white,
@@ -943,10 +959,19 @@ const _darkStyle = '''
 /// made, id -1); otherwise it's a small icon.
 bool _showsArea(Place p, int? selected) => p.id == -1 || p.id == selected;
 
+/// A zoom where the place's circle fills about half the screen width.
+double _zoomFor(Place p, double screenWidth) {
+  final metersPerPx = (p.radius * 2) / (screenWidth * 0.5);
+  final z =
+      math.log(156543.03 * math.cos(p.lat * math.pi / 180) / metersPerPx) /
+      math.ln2;
+  return z.clamp(12.0, 19.0);
+}
+
 /// A place's icon on the map.
 class PlaceIcon extends StatelessWidget {
   const PlaceIcon({super.key});
-  static const double size = 26;
+  static const double size = 18;
 
   @override
   Widget build(BuildContext context) {
@@ -956,10 +981,10 @@ class PlaceIcon extends StatelessWidget {
       decoration: BoxDecoration(
         color: FlockColors.brand,
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2),
-        boxShadow: const [BoxShadow(blurRadius: 3, color: Colors.black26)],
+        border: Border.all(color: Colors.white, width: 1.5),
+        boxShadow: const [BoxShadow(blurRadius: 2, color: Colors.black26)],
       ),
-      child: const Icon(Icons.place_rounded, size: 15, color: Colors.white),
+      child: const Icon(Icons.place_rounded, size: 11, color: Colors.white),
     );
   }
 }

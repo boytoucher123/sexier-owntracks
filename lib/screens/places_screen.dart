@@ -45,7 +45,10 @@ class GroupPlaces extends StatelessWidget {
               child: Icon(Icons.place_rounded, color: FlockColors.brand),
             ),
             title: Text(p.name),
-            subtitle: Text(Txt.placeSize(formatDistance(p.radius * 2))),
+            onTap: () {
+              app.showPlaceOnMap(group, p);
+              Navigator.of(context).popUntil((r) => r.isFirst);
+            },
             trailing: p.createdBy == me || group.isLeader
                 ? IconButton(
                     tooltip: Txt.removePlace,
